@@ -1,0 +1,1 @@
+# the utils module contains utility functions that are used throughout the gsplat package
