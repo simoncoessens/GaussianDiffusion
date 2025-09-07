@@ -9,14 +9,14 @@
     <tr>
       <td align="center" style="border: none;">
         <a href="https://github.com/simoncoessens">
-          <img src="https://github.com/simoncoessens.png" alt="Simon Coessens" width="96" height="96" style="border-radius: 50%;"/>
+          <img src="assets/avatars/simoncoessens_circle.png" alt="Simon Coessens" width="96" height="96" />
           <div><b>Simon Coessens</b></div>
         </a>
         <div style="font-size: 12px; color: #555;">CentraleSupélec • Paris, France</div>
       </td>
       <td align="center" style="border: none; padding-left: 24px;">
         <a href="https://github.com/1-ARIjitS">
-          <img src="https://github.com/1-ARIjitS.png" alt="Arijit Samal" width="96" height="96" style="border-radius: 50%;"/>
+          <img src="assets/avatars/1-ARIjitS_circle.png" alt="Arijit Samal" width="96" height="96" />
           <div><b>Arijit Samal</b></div>
         </a>
         <div style="font-size: 12px; color: #555;">CentraleSupélec • Paris, France</div>
@@ -25,13 +25,14 @@
   </table>
 </div>
 
-<div align="center" style="margin-top: 8px;">
+<div align="center" style="margin-top: 8px; margin-bottom: 8px;">
   <sub>Supervised by</sub>
   <br/>
   <a href="https://github.com/akashjorss">
-    <img src="https://github.com/akashjorss.png" alt="Akash Malhotra" width="80" height="80" style="border-radius: 50%;"/>
+    <img src="assets/avatars/akashjorss_circle.png" alt="Akash Malhotra" width="80" height="80" />
   </a>
   <div><a href="https://github.com/akashjorss"><b>Akash Malhotra</b></a></div>
+  <div style="font-size: 12px; color: #555;">PhD student, Université Paris-Saclay</div>
 </div>
 
 This project was initiated during our Master’s at CentraleSupélec, and we have continued (and are still continuing) to develop it as a side project.
@@ -47,6 +48,8 @@ GaussianDiffusion is an ongoing research effort. Early evidence suggests that le
 - Paper (preprint): <a href="GaussianDiffusion__Learning_Image_Generation_Process_in_GaussianRepresentation_Space.pdf">GaussianDiffusion — Learning Image Generation Process in Gaussian Representation Space<br/><img src="animations/paper_preview.png" alt="Paper preview" width="280" /></a>
 - Review PDF (SP4V workshop): <a href="ICCV_SP4V_REVIEWS.pdf">ICCV Structural Priors for Vision (SP4V) reviews<br/><img src="animations/sp4v_preview.png" alt="SP4V workshop preview" width="280" /></a>
 - SP4V workshop website: [sp4v.github.io](https://sp4v.github.io/)
+- HAL submission: [hal-05243514](https://hal.science/view/index/docid/5243514) (in progress)
+- arXiv: submission in progress
 
 ## Highlights
 
