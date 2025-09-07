@@ -120,7 +120,7 @@ See loaders in `src/dataset.py` for exact formats.
 - Schedules: `src/ddpm.py`
 - Rendering: `src/utils/gaussian_to_image.py`
 
-## Repro tips
+## Reproduction Guide
 
 - Ensure your dataset paths are correct and match the expected structure (`src/dataset.py`).
 - For module imports to work consistently, prefer `python -m src.<...>` from the repo root, or set `PYTHONPATH=$(pwd)`.
