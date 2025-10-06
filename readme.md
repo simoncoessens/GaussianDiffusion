@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://centralesupelec.hal.science/public/CentraleSupelec_Quadri_1.png" alt="CentraleSupélec" height="72" />
+  <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/d/de/LogoCS.png/1200px-LogoCS.png" alt="CentraleSupélec" height="72" />
 </div>
 
 ## Authors and origin
