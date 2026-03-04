@@ -58,7 +58,7 @@ def generate_2D_gaussian_splatting(kernel_size, sigma_x, sigma_y, rho,
         covariance[..., 0, 0] += epsilon
         covariance[..., 1, 1] += epsilon
     try:
-        inv_covariance = torch.inverse(covariance)
+        inv_covariance = torch.linalg.inv(covariance)
     except RuntimeError as e:
         raise ValueError("Covariance matrix inversion failed. Check input parameters.") from e
 
@@ -85,6 +85,7 @@ def generate_2D_gaussian_splatting(kernel_size, sigma_x, sigma_y, rho,
 
     # Normalize the kernel
     kernel_max = kernel.view(batch_size, -1).max(dim=1, keepdim=True)[0].view(batch_size, 1, 1)
+    kernel_max = kernel_max.clamp(min=1e-8)
     kernel_normalized = kernel / kernel_max
 
     # Prepare kernel for channel repetition and later transformation
@@ -174,7 +175,7 @@ def generate_2D_gaussian_splatting_gray(kernel_size, sigma_x, sigma_y, rho,
         covariance[..., 1, 1] = torch.clamp(covariance[..., 1, 1], min=epsilon)
 
     try:
-        inv_covariance = torch.inverse(covariance)
+        inv_covariance = torch.linalg.inv(covariance)
     except RuntimeError as e:
         raise ValueError("Covariance matrix inversion failed. Check input parameters.") from e
 
@@ -203,6 +204,7 @@ def generate_2D_gaussian_splatting_gray(kernel_size, sigma_x, sigma_y, rho,
 
     # Normalize the kernel (maximum value becomes 1).
     kernel_max = kernel.view(batch_size, -1).max(dim=1, keepdim=True)[0].view(batch_size, 1, 1)
+    kernel_max = kernel_max.clamp(min=1e-8)
     kernel_normalized = kernel / kernel_max
 
     # Prepare kernel for channel repetition.
