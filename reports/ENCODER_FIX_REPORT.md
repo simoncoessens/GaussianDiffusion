@@ -137,23 +137,6 @@ K=70 with no early stop revealed the true ceiling: 37.8–50 dB across real MNIS
 
 `alpha` (column 3 of W) is computed in `_to_physical` but never passed to `generate_2D_gaussian_splatting`. After encoding, alpha ≈ 0.499 ± 0.019 for all images (frozen at its initial sigmoid(0) value). The diffusion model learns this trivially. Future work could either remove alpha or wire it into the renderer.
 
----
-
-## Dataset Regeneration
-
-Full MNIST re-encode submitted with the fixed encoder:
-
-| Split | Images | K | Target PSNR | Jobs |
-|---|---|---|---|---|
-| test | 10,000 | 70 | 40 dB | 128450 (10 workers) |
-| train | 60,000 | 70 | 30 dB | 128477 (10 workers) |
-
-Output: `data/mnist_gaussian_representations_v2/{train,test}/`
-
-Verified on first 20 test files: mean=39.6 dB, min=32.5 dB, all ≥ 30 dB.
-
----
-
 ## Files Changed
 
 | File | Change |
