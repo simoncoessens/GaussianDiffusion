@@ -1,0 +1,21 @@
+# Ignore LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.bbl
+*.blg
+main.pdf
+
+# Ignore cache
+figures/cache.pt
+
+# Keep all sources, figures, and videos
+!*.tex
+!*.py
+!figures/*.png
+!videos/*.gif
+!videos/*.mp4

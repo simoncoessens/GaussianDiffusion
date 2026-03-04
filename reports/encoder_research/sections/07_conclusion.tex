@@ -1,0 +1,80 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+\subsection{Summary of Findings}
+
+We have validated the Gaussian encoder used in GaussianDiffusion on MNIST across
+all ten digit classes.  The key findings are:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Coordinate-inversion bug fixed.}
+        The root cause of poor encoder performance was a sign error in three places
+        in \texttt{src/encode.py}: the initialisation, dead-mask, and recycling
+        functions all failed to account for the coordinate inversion of
+        \texttt{F.affine\_grid}.  The three-line fix raises mean PSNR from
+        ${\approx}26\,\text{dB}$ to $44.2 \pm 3.7\,\text{dB}$ and brings the
+        alive fraction from ${\approx}60\%$ to $100\%$.
+
+  \item \textbf{$K=70$ Gaussians is well-chosen.}
+        K-sensitivity analysis confirms that $K=70$ lies in the diminishing-returns
+        regime: going from $K=50$ to $K=70$ yields ${\approx}2\,\text{dB}$, but
+        $K=70$ to $K=100$ yields less than $1\,\text{dB}$.
+
+  \item \textbf{MSE loss is optimal.}
+        L1\,+\,SSIM converges more slowly and achieves lower final PSNR for MNIST.
+        MSE remains the recommended loss function.
+
+  \item \textbf{Spatial structure is meaningful.}
+        Gaussians cluster tightly on digit strokes, and the latent space has
+        visible class-conditional structure under PCA, which is encouraging for
+        the downstream generative model.
+
+  \item \textbf{Normalization is safe.}
+        All 7 parameters can be mapped to $[-1, 1]$ without clipping;
+        using empirical ranges is recommended over theoretical ranges.
+
+  \item \textbf{$\alpha$ is vestigial.}
+        The opacity parameter has zero effect on rendering.
+        It should be removed from the encoder output or frozen at $0.5$
+        before diffusion training.
+
+  \item \textbf{Encoding variance is tolerable.}
+        Different random seeds produce parametrically different but functionally
+        equivalent $\W$ tensors.  The diffusion model must handle this
+        one-to-many mapping.
+\end{enumerate}
+
+\subsection{Recommendations for Diffusion Model Training}
+
+Based on these findings we make the following recommendations before training the
+DDPM GaussianTransformer:
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Remove or freeze $\alpha$} to avoid wasting model capacity on a
+        meaningless dimension.
+  \item \textbf{Use empirical per-parameter $[\min, \max]$ from the training split}
+        for normalisation to maximise the effective dynamic range.
+  \item \textbf{Encode the full training split at $K=70$, $T_\text{max}=3000$,
+        early stop at $40\,\text{dB}$} using the corrected encoder.  All images
+        tested achieve at least $37.8\,\text{dB}$; a $32\,\text{dB}$ floor can
+        be set as a quality gate for the dataset.
+  \item \textbf{Consider a canonical ordering} of the $K$ Gaussians
+        (e.g.\ sort by position or colour) to reduce the encoding variance seen
+        by the diffusion model.
+  \item \textbf{Validate reconstruction on a held-out test split} before declaring
+        the encoder production-ready for other datasets (Sprites, CIFAR-10).
+\end{itemize}
+
+\subsection{Limitations and Future Work}
+
+\begin{itemize}[leftmargin=2em]
+  \item The encoder is currently single-image, CPU-only, and takes ${\sim}5$--$30$\,s
+        per image.  Parallelisation via SLURM job arrays (already scripted in
+        \texttt{scripts/encode\_mnist.py}) is necessary for large datasets.
+  \item We have only validated on MNIST.  More complex datasets (Sprites, CIFAR-10)
+        will require larger $K$ and may need hyperparameter tuning.
+  \item The $\alpha$ parameter should be cleanly removed from the architecture
+        rather than left as dead weight.
+  \item Perceptual loss (VGG features) may be beneficial for more complex images
+        where MSE does not capture texture.
+\end{itemize}

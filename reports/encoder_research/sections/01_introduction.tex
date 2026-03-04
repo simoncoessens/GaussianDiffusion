@@ -1,0 +1,59 @@
+\section{Introduction}
+\label{sec:introduction}
+
+Generative models have made remarkable progress on pixel-space images, but the
+computational cost of operating directly on dense pixel grids motivates the search
+for compact latent representations.
+\emph{Gaussian splatting}~\cite{kerbl20233d} provides one such representation:
+an image is described as a superposition of $K$ anisotropic 2-D Gaussians,
+each parameterised by position, scale, orientation, colour, and opacity.
+Such representations are interpretable, differentiable, and naturally sparse.
+
+The \textbf{GaussianDiffusion} project exploits Gaussian splatting as a latent
+space for a denoising diffusion probabilistic model (DDPM).  The pipeline is:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Encode:} fit $K$ Gaussians to each training image using gradient
+        descent $\rightarrow$ tensor $\W \in \R^{K \times 7}$.
+  \item \textbf{Train:} learn a DDPM GaussianTransformer that generates $\W$
+        tensors from Gaussian noise.
+  \item \textbf{Sample:} run reverse diffusion on the transformer, then render
+        the predicted $\W$ with the Gaussian splatting renderer to obtain images.
+\end{enumerate}
+
+\noindent
+This report focuses exclusively on \textbf{Step~1}: the correctness, quality, and
+downstream suitability of the encoder.
+A sound encoder is a prerequisite for everything downstream.
+Poor reconstructions set a hard ceiling on generative quality; parameter
+distributions that violate assumptions (non-smooth, multi-modal, poorly normalised)
+make diffusion training harder.
+
+\subsection{Scope and Contributions}
+
+\noindent This report makes the following contributions:
+
+\begin{itemize}[leftmargin=2em]
+  \item A full description of the encoder's architecture and optimisation procedure
+        (\S\ref{sec:architecture}).
+  \item A mathematical account of the Gaussian splatting renderer, including an
+        explanation of the \texttt{F.affine\_grid} coordinate convention
+        (\S\ref{sec:renderer}).
+  \item Discovery and diagnosis of a coordinate-inversion bug that prevented
+        convergence, and verification of the three-line fix (\S\ref{sec:bug}).
+  \item Quantitative validation on MNIST: per-digit PSNR statistics, convergence
+        dynamics, K-sensitivity, loss-function ablation, and parameter analysis
+        (\S\ref{sec:experiments}).
+  \item Assessment of downstream readiness for diffusion model training
+        (\S\ref{sec:downstream}).
+\end{itemize}
+
+\subsection{Dataset and Setting}
+
+All experiments use the MNIST handwritten-digit dataset
+($28 \times 28$ greyscale images, pixel values in $[0,1]$).
+We encode $N = 50$ images (5 per digit class) using the corrected encoder
+with $K = 70$ Gaussians, $3{,}000$ maximum epochs, learning rate $5\!\times\!10^{-3}$,
+kernel size $11$, and early stopping at MSE\,$ < 10^{-4}$ ($\approx 40\,\text{dB}$
+PSNR).  Additional experiments vary $K$, the loss function, and the random seed.
+All computations are performed on CPU; the same code runs on GPU without modification.

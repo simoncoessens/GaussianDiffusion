@@ -1,0 +1,187 @@
+\section{Encoder Architecture}
+\label{sec:architecture}
+
+\subsection{Optimisation Objective}
+
+Given a greyscale target image $\I \in [0,1]^{H \times W}$, the encoder finds
+physical Gaussian parameters $\W^* \in \R^{K \times 7}$ that minimise
+mean-squared error (MSE) between the rendered image and the target:
+
+\begin{equation}
+  \W^* = \argmin_{\W} \;\MSE\!\bigl(\Render(\W),\, \I\bigr)
+       = \argmin_{\W} \;\frac{1}{HW}\sum_{i,j}
+         \bigl(\Render(\W)_{ij} - \I_{ij}\bigr)^2,
+  \label{eq:objective}
+\end{equation}
+
+\noindent where $\Render(\W)$ is the differentiable Gaussian splatting renderer
+(Section~\ref{sec:renderer}).
+
+\subsection{Parameter Layout}
+
+Each Gaussian $k \in \{1,\ldots,K\}$ is described by a 7-dimensional parameter
+vector $\W_{k,:} = [\sigma_x,\, \sigma_y,\, \rho,\, \alpha,\, c,\, x,\, y]$
+with the physical ranges shown in Table~\ref{tab:params}.
+
+\begin{table}[ht]
+\centering
+\caption{Physical parameters of each 2-D Gaussian (one row of $\W$).}
+\label{tab:params}
+\begin{tabular}{lllp{6.5cm}}
+\toprule
+\textbf{Symbol} & \textbf{Name} & \textbf{Range} & \textbf{Meaning} \\
+\midrule
+$\sigma_x$ & std.\ dev.\ $x$ & $(0, 1)$  & Horizontal spread of the Gaussian \\
+$\sigma_y$ & std.\ dev.\ $y$ & $(0, 1)$  & Vertical spread of the Gaussian \\
+$\rho$     & correlation     & $(-1, 1)$ & Off-axis tilt; covariance $= \rho\sigma_x\sigma_y$ \\
+$\alpha$   & opacity         & $(0, 1)$  & \emph{Vestigial} — not passed to renderer (§\ref{sec:alpha}) \\
+$c$        & colour          & $(0, 1)$  & Greyscale intensity contributed by this Gaussian \\
+$x$        & position $x$    & $(-1, 1)$ & Horizontal centre in normalised image coords \\
+$y$        & position $y$    & $(-1, 1)$ & Vertical centre in normalised image coords \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Raw Parameterisation and Differentiable Transforms}
+
+The optimiser operates on \emph{unconstrained raw parameters}
+$\Wraw \in \R^{K \times 7}$, mapped to physical space by smooth, bounded
+transforms that maintain differentiability throughout:
+
+\begin{align}
+  \sigma_x &= \sigmoid(\Wraw_{:,0}), &
+  \sigma_y &= \sigmoid(\Wraw_{:,1}), \label{eq:sigma}\\
+  \rho     &= \tanh(\Wraw_{:,2}),    &
+  \alpha   &= \sigmoid(\Wraw_{:,3}), \label{eq:rho}\\
+  c        &= \sigmoid(\Wraw_{:,4}), &
+  x        &= \tanh(\Wraw_{:,5}),\quad
+  y = \tanh(\Wraw_{:,6}).              \label{eq:xy}
+\end{align}
+
+\noindent This reparameterisation ensures that gradient descent on $\Wraw$
+cannot push any parameter outside its valid range, eliminating the need for
+projected gradient methods or explicit clipping during training.
+
+\subsection{Initialisation}
+\label{sec:init}
+
+Initialisation has a large impact on convergence speed.
+Gradient descent on the rendering objective has many local minima, and
+Gaussians that start far from bright image regions converge slowly or not at all.
+
+\paragraph{Brightness-weighted seeding.}
+We seed position $(x_k, y_k)$ by sampling pixel coordinates from the
+distribution $p_\text{pixel} \propto \I_{ij}$ with replacement.
+This concentrates initial Gaussians in bright (ink) regions where they must
+contribute, rather than in background regions where their gradient signal is
+near-zero.
+
+\medskip\noindent
+\textbf{Why with replacement?}\ \ Sampling without replacement spreads Gaussians
+to dimmer pixels where the MSE gradient is weaker.
+Competitive pressure from overlapping Gaussians — when several are seeded on
+the same bright stroke — drives rapid spatial diversification in the first
+${\sim}500$ epochs via gradient-driven competition, achieving ${\approx}6\,\text{dB}$
+higher PSNR by epoch $1{,}000$ than without-replacement seeding.
+
+\paragraph{Coordinate inversion convention.}
+Due to the affine-grid coordinate inversion of the renderer
+(Section~\ref{sec:coord_convention}), the initialisation must set
+$\Wraw_{k,5} = \atanh(-x_\text{pixel})$ and
+$\Wraw_{k,6} = \atanh(-y_\text{pixel})$
+so that the Gaussian renders at the desired pixel position.
+This was the source of the coordinate-inversion bug (Section~\ref{sec:bug}).
+
+\paragraph{Shape initialisation.}
+All $K$ Gaussians are initialised with equal, small radii:
+$\Wraw_{k,0} = \Wraw_{k,1} = -1.5$ (i.e.\ $\sigma_x = \sigma_y \approx 0.18$),
+zero correlation ($\Wraw_{k,2} = 0$), and colour seeded from the pixel value
+$c_k = \sigmoid(\logit(\I_{y_k, x_k}))$.
+
+\paragraph{All-black images.}
+If $\|\I\|_1 < 10^{-7}$ (all-black image), pixel-weighted sampling degenerates.
+In this case positions are sampled uniformly, which is the correct behaviour.
+
+\subsection{Optimisation}
+\label{sec:optimisation}
+
+We optimise $\Wraw$ with Adam and a cosine annealing schedule with warm restarts:
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Optimiser}: Adam, $\eta = 5 \times 10^{-3}$.
+  \item \textbf{Scheduler}: CosineAnnealingWarmRestarts with $T_0 = \lfloor
+        \text{epochs}/3 \rfloor$, $T_\text{mult} = 1$, $\eta_\text{min} = 10^{-5}$.
+        Three full cosine cycles allow the learning rate to reset to its full value,
+        helping the optimiser escape shallow local minima.
+        Empirically, images that plateau at ${\sim}26\,\text{dB}$ can jump $6\text{--}9\,\text{dB}$
+        when the LR resets to ${\approx}10^{-3}$.
+  \item \textbf{Early stopping}: training halts when MSE\,$<10^{-4}$
+        ($\PSNR \approx 40\,\text{dB}$).
+  \item \textbf{Maximum epochs}: $3{,}000$.
+\end{itemize}
+
+Algorithm~\ref{alg:encode} gives the complete training procedure.
+
+\begin{algorithm}[ht]
+\caption{Gaussian encoder for a single image}
+\label{alg:encode}
+\begin{algorithmic}[1]
+\Require Image $\I \in [0,1]^{H \times W}$, $K$, \textit{epochs}, $\eta$,
+         \textit{early\_stop}, \textit{recycle\_every}
+\State $\Wraw \leftarrow \textsc{InitGaussians}(\I, K)$
+       \Comment{brightness-weighted, coord-inversion aware}
+\State $\theta \leftarrow \textsc{Adam}([\Wraw],\; \eta)$
+\State $\textit{scheduler} \leftarrow \textsc{CosineWarmRestarts}(\theta,\; T_0=\lfloor\textit{epochs}/3\rfloor)$
+\For{$e = 0, 1, \ldots, \textit{epochs}-1$}
+  \State $\W \leftarrow \textsc{ToPhysical}(\Wraw)$
+  \State $\hat{\I} \leftarrow \Render(\W)$
+         \Comment{differentiable Gaussian splatting}
+  \State $\ell \leftarrow \MSE(\hat{\I}, \I)$
+  \State Back-propagate $\ell$ and update $\Wraw$ via $\theta$
+  \State Step scheduler
+  \If{$(e+1) \bmod \textit{recycle\_every} = 0$}
+    \State $\textsc{Recycle}(\Wraw, \I, \theta)$
+           \Comment{teleport dead Gaussians to under-reconstructed regions}
+  \EndIf
+  \If{$\ell < \textit{early\_stop}$} \textbf{break} \EndIf
+\EndFor
+\State \Return $\textsc{ToPhysical}(\Wraw)$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Dead-Gaussian Detection and Recycling}
+\label{sec:recycling}
+
+A Gaussian is \emph{dead} when its centre lies on a background pixel
+(target intensity $< 0.05$).  These Gaussians contribute nothing to the
+reconstruction and waste optimiser capacity.
+
+Every \textit{recycle\_every} epochs (default: $300$), we detect dead Gaussians
+and \emph{teleport} them to under-reconstructed regions:
+
+\begin{enumerate}[leftmargin=2em]
+  \item Render the current approximation $\hat{\I}$.
+  \item Compute residual $r = (\I - \hat{\I})_+ = \max(0,\;\I - \hat{\I})$.
+  \item Sample new positions weighted by $r$ (regions the model is missing most).
+  \item Re-initialise dead rows of $\Wraw$ with new positions and pixel colours.
+  \item Reset the Adam moment tensors for recycled rows (stale second moments
+        from the dead region would otherwise cause a large spurious update).
+\end{enumerate}
+
+\noindent
+\textbf{Why not use colour threshold for death detection?}\ \
+Overlapping Gaussians legitimately suppress each other's colour through
+gradient-driven competition, so colour~$<0.05$ is a false positive.
+Only the spatial criterion (centre on background) is used.
+
+\subsection{The Vestigial \texorpdfstring{$\alpha$}{alpha} Parameter}
+\label{sec:alpha}
+
+The $\alpha$ (opacity) parameter is decoded from the raw parameters by
+$\alpha = \sigmoid(\Wraw_{:,3})$, but it is \emph{never passed to the renderer}.
+The function \texttt{generate\_2D\_gaussian\_splatting} does not accept an opacity
+argument; Gaussian contributions are composited additively weighted only by $c$
+(colour).
+As a result, $\alpha$ is free to take any value during training without affecting
+the rendered image.
+This is verified experimentally in Section~\ref{sec:alpha_exp}.

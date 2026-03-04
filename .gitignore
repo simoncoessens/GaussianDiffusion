@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data and outputs
+data/
+checkpoints/
+results/
+logs/
+*.out
+*.err
+*.log
+
+# HDF5 and datasets
+*.h5
+*.hdf5
+*.pt
+
+# Wandb
+wandb/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# LaTeX build artifacts (keep source, ignore builds)
+reports/**/*.aux
+reports/**/*.log
+reports/**/*.out
+reports/**/*.toc
+reports/**/*.pdf
+reports/**/*.synctex.gz
+reports/**/*.fdb_latexmk
+reports/**/*.fls
+reports/**/*.bbl
+reports/**/*.blg
+
+# But keep LaTeX sources and figures
+!reports/**/*.tex
+!reports/**/*.png
+!reports/**/*.jpg
+!reports/**/*.pdf  # Allow specific PDFs if needed
+!reports/**/*.gif
+!reports/**/*.mp4
+
+# Keep important data files (allow specific patterns if needed)
+!data/.gitkeep
+
+# Keep structure
+!logs/.gitkeep
+!checkpoints/.gitkeep
+!results/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db

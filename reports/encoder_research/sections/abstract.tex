@@ -1,0 +1,23 @@
+We present a comprehensive validation study of the \emph{Gaussian encoder} used in
+GaussianDiffusion, a diffusion model that operates in the latent space of 2-D Gaussian
+splatting representations.  The encoder fits $K$ two-dimensional Gaussians to a greyscale
+image by gradient descent, producing a compact $K\!\times\!7$ parameter tensor that
+a downstream DDPM transformer subsequently learns to generate.
+
+During development a critical \textbf{coordinate-inversion bug} was discovered: the
+renderer (\texttt{F.affine\_grid}) inverts the translation coordinates, causing
+Gaussian seeds placed at pixel positions $(x, y)$ to render on the opposite side of
+the image.  Prior to the fix the encoder achieved only $26\,\mathrm{dB}$ mean PSNR
+with $60\%$ dead Gaussians even after $3\,000$ epochs.  Three one-line changes to
+the initialisation, dead-mask, and recycling routines corrected the convention, raising
+mean PSNR to $\mathbf{44.2 \pm 3.7\,\mathrm{dB}}$ with $\mathbf{100\%}$ alive
+Gaussians and convergence within ${\sim}790$ epochs on average.
+
+We validate the encoder on MNIST across all ten digit classes, report per-digit PSNR
+statistics, convergence dynamics, parameter distributions, spatial structure of the
+learned Gaussians, K-sensitivity, and a loss-function ablation (MSE vs.\ L1\,+\,SSIM).
+We further assess \emph{downstream readiness}: whether the encoded representations
+are suitable as training data for a diffusion model, examining normalization coverage,
+latent-space structure (PCA), encoding consistency, and the vestigial $\alpha$ parameter.
+Our analysis confirms that the corrected encoder produces clean, normalizable, structurally
+coherent representations that are ready for diffusion model training.
