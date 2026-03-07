@@ -1,10 +1,12 @@
 """
-Encode a folder of raw grayscale images into 2D Gaussian splatting representations.
+Encode raw images into 2D Gaussian splatting representations.
 
 Each image is fitted independently via gradient descent. The result is a
-tensor W of shape [K, 7] with columns:
-  [sigma_x, sigma_y, rho, alpha, colour, x, y]
-saved as a .pt file containing {"W": W}.
+tensor W of shape [K, C+6] with columns:
+  Grayscale (C=1): [sigma_x, sigma_y, rho, alpha, colour, x, y]        → 7 cols
+  RGB       (C=3): [sigma_x, sigma_y, rho, alpha, r, g, b, x, y]      → 9 cols
+
+General layout: [sigma_x, sigma_y, rho, alpha, colour_0..colour_{C-1}, x, y]
 
 Usage:
     python -m src.encode \\
@@ -26,7 +28,10 @@ from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
 
-from src.utils.gaussian_to_image import generate_2D_gaussian_splatting
+from src.utils.gaussian_to_image import (
+    generate_2D_gaussian_splatting,
+    generate_2D_gaussian_splatting_batch,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -71,57 +76,75 @@ def ssim_loss(pred: torch.Tensor, target: torch.Tensor, window_size: int = 11) -
 # ---------------------------------------------------------------------------
 
 def _init_gaussians(
-    image: torch.Tensor,  # [H, W] in [0, 1]
+    image: torch.Tensor,  # [H, W, C] in [0, 1]
     K: int,
     device: str,
+    init_mode: str = "brightness",
+    sigma_activation: str = "sigmoid",
 ) -> torch.Tensor:
     """
-    Seed Gaussian positions weighted by pixel brightness: Gaussians start inside
-    bright regions (stroke interiors) where they need to contribute.
+    Seed Gaussian positions weighted by pixel statistics.
 
-    Returns raw (unconstrained) parameters of shape [K, 7]:
-    [log_sigma_x, log_sigma_y, atanh_rho, alpha_logit, colour_logit, x_raw, y_raw]
+    Args:
+        init_mode: "brightness" (default) or "gradient" (weight by edge magnitude).
+        sigma_activation: "sigmoid" (default) or "softplus" (adjusts init value).
+
+    Returns raw (unconstrained) parameters of shape [K, C+6]:
+    [log_sigma_x, log_sigma_y, atanh_rho, alpha_logit, colour_logits..., x_raw, y_raw]
     """
-    H, W = image.shape
-    flat = image.view(-1)
+    if image.dim() == 2:
+        image = image.unsqueeze(-1)  # [H, W] → [H, W, 1]
+    H, W, C = image.shape
+    brightness = image.mean(dim=-1)  # [H, W]
+
+    if init_mode == "gradient":
+        # Compute gradient magnitude via finite differences (Sobel-like)
+        # Pad to handle borders
+        padded = brightness.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+        padded = F.pad(padded, (1, 1, 1, 1), mode="reflect")
+        dx = padded[:, :, 1:-1, 2:] - padded[:, :, 1:-1, :-2]  # horizontal
+        dy = padded[:, :, 2:, 1:-1] - padded[:, :, :-2, 1:-1]  # vertical
+        grad_mag = torch.sqrt(dx ** 2 + dy ** 2 + 1e-8).squeeze()  # [H, W]
+        # Blend: 70% gradient, 30% brightness
+        weights = 0.7 * grad_mag + 0.3 * brightness
+        flat = weights.view(-1)
+    else:
+        flat = brightness.view(-1)
 
     if flat.sum() < 1e-7:
-        # All-black image: pure uniform sampling
         probs = torch.ones_like(flat) / flat.numel()
     else:
-        # Sample positions weighted by brightness: Gaussians start inside bright
-        # regions (e.g. digit strokes) where they actually need to fit.
-        # NOTE: gradient-weighted init (Sobel) sounds appealing but is wrong for
-        # flat images like MNIST — gradients are zero inside strokes and high only
-        # at 1-px edges, so Gaussians initialise straddling background/stroke and
-        # take much longer to converge inward.
-        # NOTE: replacement=False was tested and hurts PSNR significantly (~6 dB at
-        # epoch 1000). With replacement=True, multiple Gaussians piling onto the same
-        # bright pixels creates strong competitive pressure that rapidly diversifies
-        # positions through gradient-driven competition in epochs 0-500. Without
-        # replacement, Gaussians spread to dimmer pixels and lose the strong initial
-        # gradient signal that drives fast convergence.
         probs = flat / (flat.sum() + 1e-8)
 
     indices = torch.multinomial(probs, num_samples=K, replacement=True)
     ys = (indices // W).float() / (H - 1) * 2 - 1   # in [-1, 1]
     xs = (indices % W).float() / (W - 1) * 2 - 1
 
-    colours_phys = flat[indices].clamp(0.05, 0.95)
-    colours_raw  = torch.logit(colours_phys)                            # inverse of sigmoid
-    # Renderer inverts coordinates: Gaussian with W_raw[i,5]=r renders at x = -tanh(r).
-    # To render at actual pixel position xs, we need W_raw[i,5] = atanh(-xs).
+    # Get colour values at sampled positions
+    flat_colours = image.reshape(-1, C)  # [H*W, C]
+    colours_phys = flat_colours[indices].clamp(0.05, 0.95)  # [K, C]
+    colours_raw  = torch.logit(colours_phys)                # [K, C]
+
+    # Renderer inverts coordinates: Gaussian with W_raw[i, 4+C]=r renders at x = -tanh(r).
+    # To render at actual pixel position xs, we need W_raw[i, 4+C] = atanh(-xs).
     xs_raw = torch.atanh((-xs).clamp(-1 + 1e-6, 1 - 1e-6))
     ys_raw = torch.atanh((-ys).clamp(-1 + 1e-6, 1 - 1e-6))
-    log_sigma = torch.full((K,), -1.5, device=device)  # sigma ~ 0.22
+
+    # Sigma init: adjust for activation function
+    if sigma_activation == "softplus":
+        # softplus(-1.5) ≈ 0.167, close to sigmoid(-1.5) ≈ 0.182
+        sigma_init = torch.full((K,), -1.5, device=device)
+    else:
+        sigma_init = torch.full((K,), -1.5, device=device)  # sigmoid(-1.5) ≈ 0.182
+
     atanh_rho = torch.zeros(K, device=device)
     alpha_logit = torch.zeros(K, device=device)
 
-    W_init = torch.stack(
-        [log_sigma, log_sigma, atanh_rho, alpha_logit,
-         colours_raw.to(device), xs_raw.to(device), ys_raw.to(device)],
-        dim=1,
-    )  # [K, 7]
+    W_init = torch.cat([
+        torch.stack([sigma_init, sigma_init, atanh_rho, alpha_logit], dim=1),  # [K, 4]
+        colours_raw.to(device),                                                # [K, C]
+        torch.stack([xs_raw.to(device), ys_raw.to(device)], dim=1),           # [K, 2]
+    ], dim=1)  # [K, C+6]
     return W_init
 
 
@@ -129,35 +152,45 @@ def _init_gaussians(
 # Raw → physical parameters
 # ---------------------------------------------------------------------------
 
-def _to_physical(W_raw: torch.Tensor) -> dict:
-    """Convert unconstrained raw params to physically valid ranges."""
+def _to_physical(W_raw: torch.Tensor, channels: int = 1,
+                  sigma_activation: str = "sigmoid") -> dict:
+    """Convert unconstrained raw params to physically valid ranges.
+
+    Column layout: [sigma_x, sigma_y, rho, alpha, colour_0..colour_{C-1}, x, y]
+    """
+    C = channels
+    if sigma_activation == "softplus":
+        sigma_fn = F.softplus
+    else:
+        sigma_fn = torch.sigmoid
     return {
-        "sigma_x": torch.sigmoid(W_raw[:, 0]),          # (0, 1)
-        "sigma_y": torch.sigmoid(W_raw[:, 1]),          # (0, 1)
+        "sigma_x": sigma_fn(W_raw[:, 0]),                # (0, inf) or (0, 1)
+        "sigma_y": sigma_fn(W_raw[:, 1]),                # (0, inf) or (0, 1)
         "rho":     torch.tanh(W_raw[:, 2]),              # (-1, 1)
         "alpha":   torch.sigmoid(W_raw[:, 3]),           # (0, 1)
-        "colour":  torch.sigmoid(W_raw[:, 4]),           # (0, 1)
-        "x":       torch.tanh(W_raw[:, 5]),              # (-1, 1)
-        "y":       torch.tanh(W_raw[:, 6]),              # (-1, 1)
+        "colours": torch.sigmoid(W_raw[:, 4:4+C]),      # [K, C] in (0, 1)
+        "x":       torch.tanh(W_raw[:, 4+C]),            # (-1, 1)
+        "y":       torch.tanh(W_raw[:, 4+C+1]),          # (-1, 1)
     }
 
 
-def _render(p: dict, kernel_size: int, image_size: tuple, device: str) -> torch.Tensor:
-    """Render Gaussians to a [H, W] image tensor in [0, 1]."""
+def _render(p: dict, kernel_size: int, image_size: tuple, device: str,
+            channels: int = 1, soft_clamp: bool = False) -> torch.Tensor:
+    """Render Gaussians to a [H, W, C] image tensor in [0, 1]."""
     coords = torch.stack([p["x"], p["y"]], dim=1)   # [K, 2]
-    colours = p["colour"].unsqueeze(1)               # [K, 1]
     img = generate_2D_gaussian_splatting(
         kernel_size=kernel_size,
         sigma_x=p["sigma_x"],
         sigma_y=p["sigma_y"],
         rho=p["rho"],
         coords=coords,
-        colours=colours,
+        colours=p["colours"],                        # [K, C]
         image_size=image_size,
-        channels=1,
+        channels=channels,
         device=device,
-    )  # [H, W, 1]
-    return img[:, :, 0]  # [H, W]
+        soft_clamp=soft_clamp,
+    )  # [H, W, C]
+    return img
 
 
 # ---------------------------------------------------------------------------
@@ -165,29 +198,24 @@ def _render(p: dict, kernel_size: int, image_size: tuple, device: str) -> torch.
 # ---------------------------------------------------------------------------
 
 def _dead_mask(
-    W_raw: torch.Tensor,   # [K, 7] raw params (no grad needed)
-    image: torch.Tensor,   # [H, W] float in [0, 1]
+    W_raw: torch.Tensor,   # [K, C+6] raw params (no grad needed)
+    image: torch.Tensor,   # [H, W, C] float in [0, 1]
     threshold: float = 0.05,
+    channels: int = 1,
+    sigma_activation: str = "sigmoid",
 ) -> torch.Tensor:
     """
-    Return a BoolTensor[K] marking Gaussians that are contributing nothing:
-      - center lies on a background pixel (target < threshold), OR
-      - colour has been suppressed below threshold by the optimizer.
+    Return a BoolTensor[K] marking Gaussians contributing nothing:
+      - center lies on a background pixel (brightness < threshold).
     """
-    H, W = image.shape
+    H, W_img = image.shape[0], image.shape[1]
     with torch.no_grad():
-        p = _to_physical(W_raw)
-        # The renderer inverts coordinates: a Gaussian with p["x"]=v renders at
-        # output position x = -v (due to affine_grid translation convention).
-        # After training the optimizer compensates by setting p["x"] ≈ -actual_x.
-        # So the ACTUAL rendered pixel is at (-p["x"], -p["y"]).
-        px = ((-p["x"] + 1) / 2 * (W - 1)).long().clamp(0, W - 1)
+        p = _to_physical(W_raw, channels, sigma_activation)
+        # Renderer inverts coordinates: actual rendered position is (-p["x"], -p["y"]).
+        px = ((-p["x"] + 1) / 2 * (W_img - 1)).long().clamp(0, W_img - 1)
         py = ((-p["y"] + 1) / 2 * (H - 1)).long().clamp(0, H - 1)
-        target_at_center = image[py, px]           # [K]
-        # Only flag Gaussians whose center has drifted onto a background pixel.
-        # Do NOT use colour < threshold: the optimizer legitimately suppresses
-        # colour for overlapping Gaussians (trading off coverage), which causes
-        # false positives that recycle converging Gaussians and destroy progress.
+        brightness = image.mean(dim=-1)              # [H, W]
+        target_at_center = brightness[py, px]        # [K]
         dead = target_at_center < threshold
     return dead
 
@@ -197,54 +225,60 @@ def _dead_mask(
 # ---------------------------------------------------------------------------
 
 def _recycle(
-    W_raw: torch.Tensor,       # [K, 7] — modified in-place
-    image: torch.Tensor,       # [H, W] float in [0, 1]
+    W_raw: torch.Tensor,       # [K, C+6] — modified in-place
+    image: torch.Tensor,       # [H, W, C] float in [0, 1]
     optimizer: torch.optim.Optimizer,
     kernel_size: int,
     image_size: tuple,
     device: str,
     threshold: float = 0.05,
+    channels: int = 1,
+    sigma_activation: str = "sigmoid",
+    soft_clamp: bool = False,
 ) -> int:
     """
     Detect dead Gaussians and teleport them to under-reconstructed image regions.
     Returns the number of recycled Gaussians.
     """
-    dead = _dead_mask(W_raw, image, threshold)
+    dead = _dead_mask(W_raw, image, threshold, channels, sigma_activation)
     n_dead = int(dead.sum().item())
     if n_dead == 0:
         return 0
 
+    C = channels
     H, W_img = image_size
     with torch.no_grad():
         # Render current approximation
-        p = _to_physical(W_raw)
-        rendered = _render(p, kernel_size, image_size, device)
+        p = _to_physical(W_raw, C, sigma_activation)
+        rendered = _render(p, kernel_size, image_size, device, C, soft_clamp)
 
         # Sample from residual (under-reconstructed regions)
-        residual = (image - rendered).clamp(min=0)
-        residual_probs = residual.view(-1) / (residual.sum() + 1e-8)
+        residual = (image - rendered).clamp(min=0)            # [H, W, C]
+        residual_brightness = residual.mean(dim=-1)           # [H, W]
+        residual_probs = residual_brightness.view(-1) / (residual_brightness.sum() + 1e-8)
 
         indices = torch.multinomial(residual_probs, num_samples=n_dead, replacement=True)
         ys = (indices // W_img).float() / (H - 1) * 2 - 1
         xs = (indices % W_img).float() / (W_img - 1) * 2 - 1
 
         # Build new raw params for recycled rows.
-        # Renderer inverts: Gaussian with W_raw[i,5]=r renders at x = -tanh(r).
-        # To render at actual pixel position xs, we need tanh(W_raw[i,5]) = -xs.
         xs_raw = torch.atanh((-xs).clamp(-1 + 1e-6, 1 - 1e-6))
         ys_raw = torch.atanh((-ys).clamp(-1 + 1e-6, 1 - 1e-6))
-        pixel_vals = image.view(-1)[indices].clamp(0.05, 0.95)
-        colour_raw = torch.logit(pixel_vals)
 
-        log_sigma = torch.full((n_dead,), -1.5, device=device)  # sigma ~ 0.22, same as init
-        new_rows = torch.stack([
-            log_sigma, log_sigma,
-            torch.zeros(n_dead, device=device),   # atanh_rho
-            torch.full((n_dead,), -2.0, device=device),  # alpha_logit
-            colour_raw,
-            xs_raw,
-            ys_raw,
-        ], dim=1)
+        flat_colours = image.reshape(-1, C)                    # [H*W, C]
+        pixel_vals = flat_colours[indices].clamp(0.05, 0.95)   # [n_dead, C]
+        colour_raw = torch.logit(pixel_vals)                   # [n_dead, C]
+
+        log_sigma = torch.full((n_dead,), -1.5, device=device)
+        new_rows = torch.cat([
+            torch.stack([
+                log_sigma, log_sigma,
+                torch.zeros(n_dead, device=device),            # atanh_rho
+                torch.full((n_dead,), -2.0, device=device),   # alpha_logit
+            ], dim=1),                                         # [n_dead, 4]
+            colour_raw,                                        # [n_dead, C]
+            torch.stack([xs_raw, ys_raw], dim=1),              # [n_dead, 2]
+        ], dim=1)                                              # [n_dead, C+6]
 
         W_raw.data[dead] = new_rows
 
@@ -264,7 +298,7 @@ def _recycle(
 # ---------------------------------------------------------------------------
 
 def encode_image(
-    image: torch.Tensor,          # [H, W] float in [0, 1]
+    image: torch.Tensor,          # [H, W] for grayscale or [C, H, W] for multi-channel
     K: int = 70,
     epochs: int = 1000,
     lr: float = 5e-3,
@@ -275,78 +309,87 @@ def encode_image(
     recycle_every: int = 300,
     recycle_threshold: float = 0.05,
     log_every: int = 50,
+    sigma_activation: str = "sigmoid",
+    init_mode: str = "brightness",
+    soft_clamp: bool = False,
+    use_scheduler: bool = True,
 ):
     """
-    Fit K Gaussians to a single grayscale image.
+    Fit K Gaussians to a single image (grayscale or RGB).
+
+    Input formats:
+        [H, W]    → grayscale, C=1
+        [C, H, W] → multi-channel (e.g. RGB with C=3)
 
     Returns:
-        W: tensor of shape [K, 7] with physical parameters
-           [sigma_x, sigma_y, rho, alpha, colour, x, y]
+        W: tensor of shape [K, C+6] with physical parameters
+           [sigma_x, sigma_y, rho, alpha, colour_0..colour_{C-1}, x, y]
         final_loss: float
-        history (only if return_history=True): list[dict] with keys
-            {epoch, loss, psnr_db, n_dead, recycling_event}
+        history (only if return_history=True): list[dict]
     """
-    H, W_img = image.shape
+    # Normalise input to [H, W, C]
+    if image.dim() == 2:
+        image = image.unsqueeze(-1)          # [H, W] → [H, W, 1]
+    elif image.dim() == 3:
+        image = image.permute(1, 2, 0)       # [C, H, W] → [H, W, C]
+    else:
+        raise ValueError(f"Expected 2D or 3D image, got {image.dim()}D")
+
+    H, W_img, C = image.shape
     image = image.to(device)
 
-    W_raw = _init_gaussians(image, K, device).requires_grad_(True)
+    W_raw = _init_gaussians(image, K, device, init_mode, sigma_activation).requires_grad_(True)
     optimizer = torch.optim.Adam([W_raw], lr=lr)
-    # CosineAnnealingWarmRestarts with 3 equal cycles gives the optimizer multiple
-    # fresh high-LR starts to escape local minima.  Empirical observation: images
-    # that plateau at ~26 dB can jump 6-9 dB when the optimizer escapes a local
-    # minimum with LR ≈ 1e-3; restarting at full LR every epochs/3 iterations makes
-    # this more reliable.  T_0=max(1, epochs//3) gives 3 cycles regardless of
-    # total epoch count.
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=max(1, epochs // 3), T_mult=1, eta_min=1e-5
-    )
+    scheduler = None
+    if use_scheduler:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=max(1, epochs // 3), T_mult=1, eta_min=1e-5
+        )
 
     history: list = [] if return_history else None
     final_loss = float("inf")
-    convergence_epoch = -1
     image_size = (H, W_img)
 
     for epoch in range(epochs):
         optimizer.zero_grad()
-        p = _to_physical(W_raw)
-        rendered = _render(p, kernel_size, image_size, device)
+        p = _to_physical(W_raw, C, sigma_activation)
+        rendered = _render(p, kernel_size, image_size, device, C, soft_clamp)
         loss = F.mse_loss(rendered, image)
         loss.backward()
         optimizer.step()
-        scheduler.step()
+        if scheduler is not None:
+            scheduler.step()
         final_loss = loss.item()
 
         # Recycle dead Gaussians
-        recycling_this_window = False
         if recycle_every > 0 and (epoch + 1) % recycle_every == 0:
-            n_recycled = _recycle(
-                W_raw, image, optimizer, kernel_size, image_size, device, recycle_threshold
+            _recycle(
+                W_raw, image, optimizer, kernel_size, image_size, device,
+                recycle_threshold, C, sigma_activation, soft_clamp,
             )
-            recycling_this_window = (n_recycled > 0)
 
         if return_history and (epoch % log_every == 0 or epoch == epochs - 1):
             with torch.no_grad():
                 mse = F.mse_loss(rendered.detach(), image).item()
                 psnr = min(100.0, 10 * math.log10(1.0 / mse)) if mse > 1e-10 else 100.0
-                n_dead = int(_dead_mask(W_raw, image, recycle_threshold).sum().item())
+                n_dead = int(_dead_mask(W_raw, image, recycle_threshold, C, sigma_activation).sum().item())
             history.append({
                 "epoch": epoch,
                 "loss": final_loss,
                 "psnr_db": psnr,
                 "n_dead": n_dead,
-                "recycling_event": recycling_this_window,
             })
 
         if final_loss < early_stop_threshold:
-            convergence_epoch = epoch
             break
 
     with torch.no_grad():
-        p = _to_physical(W_raw)
-        W_phys = torch.stack(
-            [p["sigma_x"], p["sigma_y"], p["rho"], p["alpha"], p["colour"], p["x"], p["y"]],
-            dim=1,
-        )  # [K, 7]
+        p = _to_physical(W_raw, C, sigma_activation)
+        W_phys = torch.cat([
+            torch.stack([p["sigma_x"], p["sigma_y"], p["rho"], p["alpha"]], dim=1),  # [K, 4]
+            p["colours"],                                                              # [K, C]
+            torch.stack([p["x"], p["y"]], dim=1),                                     # [K, 2]
+        ], dim=1)  # [K, C+6]
 
     if return_history:
         return W_phys.cpu(), final_loss, history
@@ -354,7 +397,144 @@ def encode_image(
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# Batched encode (multiple images in parallel on one GPU)
+# ---------------------------------------------------------------------------
+
+def _to_physical_batch(W_raw: torch.Tensor, channels: int = 3,
+                       sigma_activation: str = "sigmoid") -> dict:
+    """Batched version of _to_physical. W_raw: [B, K, C+6]."""
+    C = channels
+    if sigma_activation == "softplus":
+        sigma_fn = F.softplus
+    else:
+        sigma_fn = torch.sigmoid
+    return {
+        "sigma_x": sigma_fn(W_raw[:, :, 0]),           # [B, K]
+        "sigma_y": sigma_fn(W_raw[:, :, 1]),
+        "rho":     torch.tanh(W_raw[:, :, 2]),
+        "alpha":   torch.sigmoid(W_raw[:, :, 3]),
+        "colours": torch.sigmoid(W_raw[:, :, 4:4+C]),  # [B, K, C]
+        "x":       torch.tanh(W_raw[:, :, 4+C]),
+        "y":       torch.tanh(W_raw[:, :, 4+C+1]),
+    }
+
+
+def _render_batch(p: dict, kernel_size: int, image_size: tuple,
+                  device: str, channels: int = 3,
+                  soft_clamp: bool = False) -> torch.Tensor:
+    """Render B images in parallel. Returns [B, H, W, C]."""
+    coords = torch.stack([p["x"], p["y"]], dim=2)  # [B, K, 2]
+    return generate_2D_gaussian_splatting_batch(
+        kernel_size=kernel_size,
+        sigma_x=p["sigma_x"],
+        sigma_y=p["sigma_y"],
+        rho=p["rho"],
+        coords=coords,
+        colours=p["colours"],
+        image_size=image_size,
+        channels=channels,
+        device=device,
+        soft_clamp=soft_clamp,
+    )
+
+
+def encode_batch(
+    images: torch.Tensor,             # [B, C, H, W] float in [0, 1]
+    K: int = 500,
+    epochs: int = 3000,
+    lr: float = 0.04,
+    kernel_size: int = 32,
+    early_stop_threshold: float = 1e-5,
+    device: str = "cuda",
+    sigma_activation: str = "sigmoid",
+    init_mode: str = "brightness",
+    soft_clamp: bool = True,
+    use_scheduler: bool = False,
+):
+    """
+    Fit K Gaussians to B images in parallel on one GPU.
+
+    Args:
+        images: [B, C, H, W] float tensor in [0, 1]
+
+    Returns:
+        W_phys: [B, K, C+6] physical parameters
+        losses: [B] final per-image MSE losses
+    """
+    B, C, H, W_img = images.shape
+    images_hwc = images.permute(0, 2, 3, 1).to(device)  # [B, H, W, C]
+    image_size = (H, W_img)
+
+    # Initialize each image's Gaussians
+    W_list = []
+    for i in range(B):
+        W_list.append(_init_gaussians(images_hwc[i], K, device, init_mode, sigma_activation))
+    W_raw = torch.stack(W_list)  # [B, K, C+6]
+    W_raw = W_raw.requires_grad_(True)
+
+    optimizer = torch.optim.Adam([W_raw], lr=lr)
+    scheduler = None
+    if use_scheduler:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=max(1, epochs // 3), T_mult=1, eta_min=1e-5
+        )
+
+    # Track per-image convergence; snapshot params at convergence to avoid
+    # Adam momentum drift degrading quality after early stop.
+    active = torch.ones(B, dtype=torch.bool, device=device)
+    best_W = W_raw.detach().clone()      # [B, K, C+6] — best params so far
+    best_losses = torch.full((B,), float('inf'), device=device)
+
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+
+        p = _to_physical_batch(W_raw, C, sigma_activation)
+        rendered = _render_batch(p, kernel_size, image_size, device, C, soft_clamp)
+
+        # Per-image MSE: [B]
+        per_loss = ((rendered - images_hwc) ** 2).mean(dim=(1, 2, 3))
+
+        # Sum (not mean!) across images — each image's params are independent,
+        # so summing gives the same per-image gradient as sequential encoding.
+        loss = (per_loss * active.float()).sum()
+        loss.backward()
+
+        # Zero gradients for converged images so Adam doesn't touch them
+        with torch.no_grad():
+            if not active.all():
+                W_raw.grad[~active] = 0.0
+
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+
+        # Snapshot best params and check convergence
+        with torch.no_grad():
+            cur_losses = per_loss.detach()
+            improved = cur_losses < best_losses
+            if improved.any():
+                best_W[improved] = W_raw.detach()[improved]
+                best_losses[improved] = cur_losses[improved]
+
+            newly_done = active & (cur_losses < early_stop_threshold)
+            active = active & ~newly_done
+            if not active.any():
+                break
+
+    # Extract physical parameters from best snapshot
+    with torch.no_grad():
+        p = _to_physical_batch(best_W, C, sigma_activation)
+        W_phys = torch.cat([
+            torch.stack([p["sigma_x"], p["sigma_y"], p["rho"], p["alpha"]], dim=2),  # [B, K, 4]
+            p["colours"],                                                              # [B, K, C]
+            torch.stack([p["x"], p["y"]], dim=2),                                     # [B, K, 2]
+        ], dim=2)  # [B, K, C+6]
+
+    return W_phys.cpu(), best_losses.cpu()
+
+
+# ---------------------------------------------------------------------------
+# CLI (grayscale legacy)
 # ---------------------------------------------------------------------------
 
 def _load_image(path: Path) -> Optional[torch.Tensor]:

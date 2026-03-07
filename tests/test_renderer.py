@@ -151,16 +151,18 @@ def test_kernel_equals_image_size():
 
 
 # 12
-def test_kernel_larger_than_image_raises():
-    with pytest.raises(ValueError):
-        generate_2D_gaussian_splatting(
-            kernel_size=32,
-            sigma_x=torch.tensor([0.3]),
-            sigma_y=torch.tensor([0.3]),
-            rho=torch.zeros(1),
-            coords=torch.zeros(1, 2),
-            colours=torch.ones(1, 1) * 0.5,
-            image_size=(28, 28),
-            channels=1,
-            device=DEVICE,
-        )
+def test_kernel_larger_than_image_uses_direct_path():
+    """When kernel_size > image_size, the direct evaluation path handles it."""
+    img = generate_2D_gaussian_splatting(
+        kernel_size=32,
+        sigma_x=torch.tensor([0.3]),
+        sigma_y=torch.tensor([0.3]),
+        rho=torch.zeros(1),
+        coords=torch.zeros(1, 2),
+        colours=torch.ones(1, 1) * 0.5,
+        image_size=(28, 28),
+        channels=1,
+        device=DEVICE,
+    )
+    assert img.shape == (28, 28, 1)
+    assert img.min() >= 0 and img.max() <= 1

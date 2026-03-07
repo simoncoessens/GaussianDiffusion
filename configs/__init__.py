@@ -1,9 +1,11 @@
 """Dataset configuration registry."""
 
 from configs.mnist import MNIST_CONFIG
+from configs.cifar10 import CIFAR10_CONFIG
 
 CONFIGS = {
     "mnist": MNIST_CONFIG,
+    "cifar10": CIFAR10_CONFIG,
 }
 
 

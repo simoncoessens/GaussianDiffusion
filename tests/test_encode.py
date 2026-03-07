@@ -104,7 +104,7 @@ def test_to_physical_all_ranges():
     assert (p["sigma_y"] > 0).all() and (p["sigma_y"] < 1).all(), "sigma_y out of (0,1)"
     assert (p["rho"] > -1).all() and (p["rho"] < 1).all(), "rho out of (-1,1)"
     assert (p["alpha"] > 0).all() and (p["alpha"] < 1).all(), "alpha out of (0,1)"
-    assert (p["colour"] > 0).all() and (p["colour"] < 1).all(), "colour out of (0,1)"
+    assert (p["colours"] > 0).all() and (p["colours"] < 1).all(), "colours out of (0,1)"
     assert (p["x"] > -1).all() and (p["x"] < 1).all(), "x out of (-1,1)"
     assert (p["y"] > -1).all() and (p["y"] < 1).all(), "y out of (-1,1)"
 
@@ -247,7 +247,7 @@ def test_history_is_list_of_dicts():
         return_history=True, log_every=5,
     )
     assert len(history) > 0, "History is empty"
-    required_keys = {"epoch", "loss", "psnr_db", "n_dead", "recycling_event"}
+    required_keys = {"epoch", "loss", "psnr_db", "n_dead"}
     for entry in history:
         assert isinstance(entry, dict), f"Entry is not a dict: {type(entry)}"
         assert required_keys <= entry.keys(), (
@@ -268,9 +268,6 @@ def test_history_dict_values_valid():
         assert entry["psnr_db"] > 0, f"psnr_db not positive: {entry['psnr_db']}"
         assert isinstance(entry["n_dead"], int), f"n_dead not int: {type(entry['n_dead'])}"
         assert entry["n_dead"] >= 0, f"n_dead negative: {entry['n_dead']}"
-        assert isinstance(entry["recycling_event"], bool), (
-            f"recycling_event not bool: {type(entry['recycling_event'])}"
-        )
         assert entry["loss"] >= 0, f"loss negative: {entry['loss']}"
 
 
@@ -294,7 +291,7 @@ def test_history_psnr_improves():
 # 19
 def test_dead_mask_black_image():
     """On a black image, all Gaussians placed at center should be detected as dead."""
-    img = torch.zeros(IMAGE_SIZE)
+    img = torch.zeros(*IMAGE_SIZE, 1)  # [H, W, C]
     # Create W_raw with Gaussians at center and low colour
     W_raw = torch.zeros(K, 7)
     # x=0, y=0 (center) → tanh(0)=0, but image is black → target_at_center=0 < threshold
@@ -312,7 +309,7 @@ def test_dead_mask_suppressed_colour_not_dead():
     them as dead causes false positives that recycle converging Gaussians and destroy
     optimization progress. Only center-on-background is a true dead indicator.
     """
-    img = torch.ones(IMAGE_SIZE)
+    img = torch.ones(*IMAGE_SIZE, 1)  # [H, W, C]
     W_raw = torch.zeros(K, 7)
     W_raw[:, 4] = -10.0  # colour raw → sigmoid(-10) ≈ 0
     # x=y=0 → center pixel of all-ones image → target_at_center = 1.0 > 0.05
@@ -325,7 +322,7 @@ def test_dead_mask_suppressed_colour_not_dead():
 # 21
 def test_dead_mask_alive_gaussians():
     """Gaussians whose center is on a bright pixel should NOT be detected as dead."""
-    img = torch.ones(IMAGE_SIZE)
+    img = torch.ones(*IMAGE_SIZE, 1)  # [H, W, C]
     W_raw = torch.zeros(K, 7)
     # x=y=0 → center pixel of all-ones image → target_at_center = 1.0 > 0.05
     dead = _dead_mask(W_raw, img, threshold=0.05)
@@ -339,7 +336,7 @@ def test_dead_mask_alive_gaussians():
 # 22
 def test_recycle_reduces_dead_count():
     """After recycling, the number of dead Gaussians should decrease."""
-    img = torch.zeros(IMAGE_SIZE)
+    img = torch.zeros(*IMAGE_SIZE, 1)  # [H, W, C]
     img[10:18, 10:18] = 1.0   # white square in center
 
     # Init Gaussians all at top-left (black area) → all dead
@@ -362,7 +359,7 @@ def test_recycle_reduces_dead_count():
 # 23
 def test_recycle_no_dead_returns_zero():
     """_recycle should return 0 when no dead Gaussians exist."""
-    img = torch.ones(IMAGE_SIZE)
+    img = torch.ones(*IMAGE_SIZE, 1)  # [H, W, C]
     W_raw = torch.zeros(K, 7)
     W_raw[:, 4] = 2.0   # high colour → alive
     W_raw.requires_grad_(True)
