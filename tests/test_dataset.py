@@ -33,7 +33,7 @@ def test_sample_shape():
     with tempfile.TemporaryDirectory() as d:
         _make_dataset(d, n=3)
         ds = GaussianDataset(d, num_gaussians=K)
-        assert ds[0].shape == (K, 7)
+        assert ds[0].shape == (K, 6)  # alpha (col 3) is dropped
 
 
 # 3
@@ -41,7 +41,7 @@ def test_full_data_shape():
     with tempfile.TemporaryDirectory() as d:
         _make_dataset(d, n=4)
         ds = GaussianDataset(d, num_gaussians=K)
-        assert ds.data.shape == (4, K, 7)
+        assert ds.data.shape == (4, K, 6)  # alpha (col 3) is dropped
 
 
 # 4
@@ -86,7 +86,9 @@ def test_values_preserved():
         W_saved = torch.rand(K, 7)
         torch.save({"W": W_saved}, os.path.join(d, "img_0000.pt"))
         ds = GaussianDataset(d, num_gaussians=K)
-        assert (ds[0] - W_saved).abs().max() < 1e-7
+        # Alpha (col 3) is dropped: expect cols [0,1,2,4,5,6]
+        W_expected = torch.cat([W_saved[:, :3], W_saved[:, 4:]], dim=1)
+        assert (ds[0] - W_expected).abs().max() < 1e-7
 
 
 # 9

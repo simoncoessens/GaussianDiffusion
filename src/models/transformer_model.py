@@ -1,271 +1,274 @@
+"""
+DiT-style Gaussian Transformer for diffusion in 2D Gaussian splatting latent space.
+
+Architecture follows DiT (Peebles & Xie, ICCV 2023):
+  - AdaLN-Zero conditioning: timestep modulates each block via shift/scale/gate
+  - Pre-norm residual blocks with gated outputs
+  - No positional encodings on set elements (permutation equivariant)
+  - No BatchNorm (only LayerNorm)
+"""
+
 import math
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
-# ---------------------
-# Simpler Time Embedding Network (TimeSiren)
-# ---------------------
-class TimeSiren(nn.Module):
-    def __init__(self, emb_dim: int, target_dim: int) -> None:
-        super(TimeSiren, self).__init__()
-        self.lin1 = nn.Linear(1, emb_dim, bias=False)
-        self.lin2 = nn.Linear(emb_dim, emb_dim)
-        self.lin3 = nn.Linear(emb_dim, emb_dim)
-        self.lin4 = nn.Linear(emb_dim, emb_dim)
-        self.lin_out = nn.Linear(emb_dim, target_dim)
-        self.activation = nn.GELU()
+def modulate(x, shift, scale):
+    """Apply adaptive layer norm modulation: x * (1 + scale) + shift."""
+    return x * (1.0 + scale) + shift
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.view(-1, 1)
-        x = torch.sin(self.lin1(x))
-        x = self.activation(self.lin2(x))
-        x = self.activation(self.lin3(x))
-        x = self.lin4(x)
-        x = self.lin_out(x)
-        return x
 
-# ---------------------
-# Multihead Attention Module
-# ---------------------
-class MultiheadAttention(nn.Module):
-    def __init__(self, dim, num_heads=8):
-        super(MultiheadAttention, self).__init__()
-        self.mha = nn.MultiheadAttention(embed_dim=dim, num_heads=num_heads, batch_first=True)
-        self.norm = nn.LayerNorm(dim)
+class TimestepEmbedder(nn.Module):
+    """Sinusoidal positional encoding + 2-layer MLP for timestep conditioning."""
 
-    def forward(self, x):
-        attn_output, _ = self.mha(x, x, x)
-        return self.norm(x + attn_output)  # Add residual connection
-
-# ---------------------
-# Add & Norm helper module
-# ---------------------
-class AddNorm(nn.Module):
-    def __init__(self, dim):
-        super(AddNorm, self).__init__()
-        self.norm = nn.LayerNorm(dim)
-
-    def forward(self, x, sublayer):
-        return self.norm(x + sublayer(x))
-
-# ---------------------
-# Projection Block
-# ---------------------
-class ProjectionBlock(nn.Module):
-    def __init__(self, in_features, out_features):
-        super(ProjectionBlock, self).__init__()
-        self.linear = nn.Linear(in_features, out_features)
-        self.bn = nn.BatchNorm1d(out_features)
-
-    def forward(self, x):
-        x = self.linear(x)
-        x = x.transpose(1, 2)
-        x = self.bn(x)
-        x = x.transpose(1, 2)
-        x = F.gelu(x)
-        return x
-    
-# ---------------------
-# Initial Projection using ConvProjectionBlock
-# ---------------------
-class InitialProjection(nn.Module):
-    def __init__(self, in_dim, final_dim=512):
-        super(InitialProjection, self).__init__()
-        self.layer1 = ProjectionBlock(in_dim, final_dim)
-        self.layer2 = ProjectionBlock(final_dim, final_dim)
-        self.layer3 = ProjectionBlock(final_dim, final_dim)
-        self.layer4 = ProjectionBlock(final_dim, final_dim)
-        self.layer5 = ProjectionBlock(final_dim, final_dim)
-        self.shortcut = nn.Conv1d(in_dim, final_dim, kernel_size=1)
-
-    def forward(self, x):
-        # x shape: (B, L, in_dim)
-        out = self.layer1(x)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
-        out = self.layer5(out)
-        sc = x.transpose(1, 2)  # (B, in_dim, L)
-        sc = self.shortcut(sc)
-        sc = sc.transpose(1, 2)  # (B, L, final_dim)
-        return out + sc
-
-# ---------------------
-# Updated Output Projection using ConvProjectionBlock (Deep Projection)
-# ---------------------
-class OutputProjection(nn.Module):
-    def __init__(self, in_dim=512, out_dim=7):
-        super(OutputProjection, self).__init__()
-        self.layer1 = ProjectionBlock(in_dim, out_dim)
-        self.layer2 = ProjectionBlock(out_dim, out_dim)
-        self.layer3 = ProjectionBlock(out_dim, out_dim)
-        self.layer4 = ProjectionBlock(out_dim, out_dim)
-        self.layer5 = ProjectionBlock(out_dim, out_dim)
-        self.shortcut = nn.Conv1d(in_dim, out_dim, kernel_size=1)
-
-    def forward(self, x):
-        # x shape: (B, L, in_dim)
-        out = self.layer1(x)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
-        out = self.layer5(out)
-        sc = x.transpose(1, 2)
-        sc = self.shortcut(sc)
-        sc = sc.transpose(1, 2)
-        return out + sc
-
-# # ---------------------
-# # Initial Projection
-# # ---------------------
-# class InitialProjection(nn.Module):
-#     def __init__(self, in_dim, final_dim=512):
-#         super(InitialProjection, self).__init__()
-#         self.layer1 = ProjectionBlock(in_dim, 256)
-#         self.layer2 = ProjectionBlock(256, final_dim)
-#         self.shortcut = nn.Linear(in_dim, final_dim)
-
-#     def forward(self, x):
-#         out = self.layer1(x)
-#         out = self.layer2(out)
-#         sc = self.shortcut(x)
-#         return out + sc
-
-# # ---------------------
-# # Output Projection
-# # ---------------------
-# class OutputProjection(nn.Module):
-#     def __init__(self, in_dim=512, out_dim=7):
-#         super(OutputProjection, self).__init__()
-#         self.layer1 = ProjectionBlock(in_dim, 256)
-#         self.layer2 = ProjectionBlock(256, out_dim)
-#         self.shortcut = nn.Linear(in_dim, out_dim)
-
-#     def forward(self, x):
-#         out = self.layer1(x)
-#         out = self.layer2(out)
-#         sc = self.shortcut(x)
-#         return out + sc
-    
-# # ---------------------
-# # Self-Attention Module (single-head)
-# # ---------------------
-# class SelfAttention(nn.Module):
-#     def __init__(self, dim):
-#         super(SelfAttention, self).__init__()
-#         self.query = nn.Linear(dim, dim)
-#         self.key = nn.Linear(dim, dim)
-#         self.value = nn.Linear(dim, dim)
-#         self.scale = dim ** -0.5
-
-#     def forward(self, x):
-#         Q = self.query(x)
-#         K = self.key(x)
-#         V = self.value(x)
-#         attn_weights = torch.softmax(torch.bmm(Q, K.transpose(1, 2)) * self.scale, dim=-1)
-#         out = torch.bmm(attn_weights, V)
-#         return out
-
-# # ---------------------
-# # Transformer Block with enhanced MLP capacity 
-# # ---------------------    
-# class TransformerBlock(nn.Module):
-#     def __init__(self, dim):
-#         super(TransformerBlock, self).__init__()
-#         self.add_norm1 = AddNorm(dim)
-#         self.attention = SelfAttention(dim)
-#         self.add_norm2 = AddNorm(dim)
-#         # Expanded MLP: increasing intermediate dimensions for better capacity.
-#         self.mlp = nn.Sequential(
-#             nn.Linear(dim, dim * 2),
-#             nn.GELU(),
-#             nn.Linear(dim * 2, dim * 4),
-#             nn.GELU(),
-#             nn.Linear(dim * 4, dim * 2),
-#             nn.GELU(),
-#             nn.Linear(dim * 2, dim)
-#         )
-
-#     def forward(self, x):
-#         x = self.add_norm1(x, lambda inp: self.attention(inp))
-#         x = self.add_norm2(x, lambda inp: self.mlp(inp))
-#         return x
-
-# ---------------------
-# Transformer Block with Multihead Attention
-# ---------------------
-class TransformerBlock(nn.Module):
-    def __init__(self, dim, num_heads=8):
-        super(TransformerBlock, self).__init__()
-        self.add_norm1 = AddNorm(dim)
-        self.multihead_attention = MultiheadAttention(dim, num_heads)
-        self.add_norm2 = AddNorm(dim)
-        
-        # Expanded MLP
+    def __init__(self, hidden_size, frequency_embedding_size=256):
+        super().__init__()
         self.mlp = nn.Sequential(
-            nn.Linear(dim, dim * 2),
-            nn.GELU(),
-            nn.Linear(dim * 2, dim * 4),
-            nn.GELU(),
-            nn.Linear(dim * 4, dim * 2),
-            nn.GELU(),
-            nn.Linear(dim * 2, dim)
+            nn.Linear(frequency_embedding_size, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size),
         )
+        self.frequency_embedding_size = frequency_embedding_size
 
-    def forward(self, x):
-        x = self.add_norm1(x, lambda inp: self.multihead_attention(inp))
-        x = self.add_norm2(x, lambda inp: self.mlp(inp))
+    @staticmethod
+    def sinusoidal_embedding(t, dim):
+        """Create sinusoidal positional embeddings from scalar timesteps.
+
+        Args:
+            t: (B,) tensor of timestep values
+            dim: embedding dimension (must be even)
+
+        Returns:
+            (B, dim) sinusoidal embeddings
+        """
+        half_dim = dim // 2
+        freq = torch.exp(
+            -math.log(10000.0) * torch.arange(half_dim, device=t.device, dtype=torch.float32) / half_dim
+        )
+        args = t.float().unsqueeze(1) * freq.unsqueeze(0)  # (B, half_dim)
+        return torch.cat([torch.cos(args), torch.sin(args)], dim=-1)  # (B, dim)
+
+    def forward(self, t):
+        """
+        Args:
+            t: (B,) tensor of timestep indices
+
+        Returns:
+            (B, hidden_size) conditioning vector
+        """
+        t_freq = self.sinusoidal_embedding(t, self.frequency_embedding_size)
+        return self.mlp(t_freq)
+
+
+class DiTBlock(nn.Module):
+    """Transformer block with AdaLN-Zero conditioning (DiT pattern).
+
+    Each block applies:
+        x = x + gate_attn * attn(modulate(norm1(x), shift_attn, scale_attn))
+        x = x + gate_mlp  * mlp(modulate(norm2(x), shift_mlp, scale_mlp))
+
+    The modulation projection is zero-initialized so each block starts as identity.
+    """
+
+    def __init__(self, hidden_size, num_heads):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=hidden_size, num_heads=num_heads, batch_first=True
+        )
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_size, 4 * hidden_size),
+            nn.GELU(),
+            nn.Linear(4 * hidden_size, hidden_size),
+        )
+        # AdaLN modulation: projects conditioning to 6 vectors
+        # (shift_attn, scale_attn, gate_attn, shift_mlp, scale_mlp, gate_mlp)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 6 * hidden_size),
+        )
+        # Zero-initialize so block starts as identity
+        nn.init.zeros_(self.adaLN_modulation[1].weight)
+        nn.init.zeros_(self.adaLN_modulation[1].bias)
+
+    def forward(self, x, c):
+        """
+        Args:
+            x: (B, K, hidden_size) set of token embeddings
+            c: (B, hidden_size) conditioning vector (from timestep embedder)
+
+        Returns:
+            (B, K, hidden_size)
+        """
+        # Compute 6 modulation parameters from conditioning
+        mod = self.adaLN_modulation(c).unsqueeze(1)  # (B, 1, 6*H)
+        shift_attn, scale_attn, gate_attn, shift_mlp, scale_mlp, gate_mlp = mod.chunk(6, dim=-1)
+
+        # Self-attention with AdaLN
+        h = modulate(self.norm1(x), shift_attn, scale_attn)
+        attn_out, _ = self.attn(h, h, h)
+        x = x + gate_attn * attn_out
+
+        # FFN with AdaLN
+        h = modulate(self.norm2(x), shift_mlp, scale_mlp)
+        x = x + gate_mlp * self.mlp(h)
+
         return x
 
-# ---------------------
-# Gaussian Transformer with Multihead Attention
-# ---------------------
+
+class LabelEmbedder(nn.Module):
+    """Embeds class labels into conditioning vectors (for CFG)."""
+
+    def __init__(self, num_classes, hidden_size, dropout_prob=0.0):
+        super().__init__()
+        use_cfg = dropout_prob > 0
+        # +1 for the "null" / unconditional class token
+        self.embedding_table = nn.Embedding(num_classes + use_cfg, hidden_size)
+        self.num_classes = num_classes
+        self.dropout_prob = dropout_prob
+
+    def token_drop(self, labels, force_drop_ids=None):
+        """During training, randomly replace labels with null token."""
+        if force_drop_ids is None:
+            drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
+        else:
+            drop_ids = force_drop_ids == 1
+        labels = torch.where(drop_ids, self.num_classes, labels)
+        return labels
+
+    def forward(self, labels, train=False, force_drop_ids=None):
+        use_dropout = self.dropout_prob > 0
+        if (train and use_dropout) or (force_drop_ids is not None):
+            labels = self.token_drop(labels, force_drop_ids)
+        return self.embedding_table(labels)
+
+
 class GaussianTransformer(nn.Module):
-    def __init__(self, input_dim, time_emb_dim, feature_dim, num_timestamps, num_transformer_blocks=6, num_heads=8):
-        super(GaussianTransformer, self).__init__()
-        self.time_embed = TimeSiren(time_emb_dim, feature_dim)
+    """DiT-style transformer for diffusion on sets of 2D Gaussians.
+
+    Permutation equivariant: no positional encodings on set elements.
+    Timestep conditioning via AdaLN-Zero in every block.
+    Optional class conditioning for Classifier-Free Guidance (CFG).
+
+    Constructor interface kept compatible with the original model.
+    """
+
+    def __init__(self, input_dim, time_emb_dim, feature_dim, num_timestamps,
+                 num_transformer_blocks=6, num_heads=8,
+                 num_classes=0, class_dropout_prob=0.0):
+        """
+        Args:
+            input_dim: sequence length K (kept for API compatibility, unused internally)
+            time_emb_dim: hidden size for the transformer and timestep MLP
+            feature_dim: per-Gaussian feature dimension (e.g. 6)
+            num_timestamps: max T for the diffusion schedule
+            num_transformer_blocks: number of DiT blocks
+            num_heads: attention heads per block
+            num_classes: number of classes (0 = unconditional, no label embedder)
+            class_dropout_prob: probability of dropping class label (for CFG training)
+        """
+        super().__init__()
+        hidden_size = time_emb_dim  # use time_emb_dim as the hidden size
         self.num_timesteps = num_timestamps
         self.input_dim = input_dim
-        self.initial_projection = InitialProjection(in_dim=feature_dim, final_dim=512)
+        self.num_classes = num_classes
 
-        self.transformer_blocks = nn.ModuleList(
-            [TransformerBlock(dim=512, num_heads=num_heads) for _ in range(num_transformer_blocks)]
+        # Timestep conditioning
+        self.time_embed = TimestepEmbedder(hidden_size)
+
+        # Class conditioning (optional, for CFG)
+        if num_classes > 0:
+            self.label_embed = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
+
+        # Simple input/output projections
+        self.input_proj = nn.Linear(feature_dim, hidden_size)
+        self.output_proj = nn.Linear(hidden_size, feature_dim)
+
+        # DiT blocks
+        self.blocks = nn.ModuleList([
+            DiTBlock(hidden_size, num_heads)
+            for _ in range(num_transformer_blocks)
+        ])
+
+        # Final AdaLN before output projection
+        self.final_norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.final_adaLN = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 2 * hidden_size),
         )
-        self.output_projection = OutputProjection(in_dim=512, out_dim=feature_dim)
+        # Zero-init final modulation
+        nn.init.zeros_(self.final_adaLN[1].weight)
+        nn.init.zeros_(self.final_adaLN[1].bias)
 
-    def forward(self, gaussians, t):
-        # Normalize t to [0, 1]
-        t_norm = t.float() / self.num_timesteps  
-        # Expand time embedding over the set
-        t_emb = self.time_embed(t_norm).unsqueeze(1).expand(-1, gaussians.size(1), -1)
-        gaussians = gaussians + t_emb
-        x = self.initial_projection(gaussians)
+        # Zero-init output projection so initial predictions are zero
+        nn.init.zeros_(self.output_proj.weight)
+        nn.init.zeros_(self.output_proj.bias)
 
-        for block in self.transformer_blocks:
-            x = block(x)
+        self.initialize_weights()
 
-        output = self.output_projection(x)
+    def initialize_weights(self):
+        """Initialize weights following DiT conventions."""
+        # Initialize all linear layers and LayerNorms
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                # Skip layers we already zero-initialized
+                if module.weight.abs().sum() == 0:
+                    return
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+
+        self.apply(_basic_init)
+
+    def forward(self, gaussians, t, y=None):
+        """
+        Args:
+            gaussians: (B, K, feature_dim) noisy Gaussian parameters
+            t: (B,) timestep indices
+            y: (B,) class labels (optional, for CFG)
+
+        Returns:
+            (B, K, feature_dim) predicted noise
+        """
+        # Timestep conditioning
+        t_norm = t.float() / self.num_timesteps
+        c = self.time_embed(t_norm)  # (B, hidden_size)
+
+        # Add class conditioning if available
+        if self.num_classes > 0 and y is not None:
+            c = c + self.label_embed(y, train=self.training)
+
+        # Project input features to hidden dimension
+        x = self.input_proj(gaussians)  # (B, K, hidden_size)
+
+        # DiT blocks
+        for block in self.blocks:
+            x = block(x, c)
+
+        # Final AdaLN + output projection
+        mod = self.final_adaLN(c).unsqueeze(1)  # (B, 1, 2*H)
+        shift, scale = mod.chunk(2, dim=-1)
+        x = modulate(self.final_norm(x), shift, scale)
+        output = self.output_proj(x)  # (B, K, feature_dim)
+
         return output
 
-# ---------------------
-# Helper: Count model parameters
-# ---------------------
+
 def count_parameters(model):
+    """Count trainable parameters."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-# ---------------------
-# Example Usage
-# ---------------------
+
 if __name__ == "__main__":
     batch_size = 32
     num_gaussians = 70
-    feature_dim = 7
+    feature_dim = 6
     time_emb_dim = 512
-    num_blocks = 16 
+    num_blocks = 32
     num_heads = 64
-    num_timestamps = 1000 
+    num_timestamps = 200
 
     model = GaussianTransformer(
         input_dim=num_gaussians,
@@ -275,10 +278,17 @@ if __name__ == "__main__":
         num_transformer_blocks=num_blocks,
         num_heads=num_heads,
     )
-    
+
     gaussian_inputs = torch.randn(batch_size, num_gaussians, feature_dim)
-    t = torch.randint(low=1, high=1001, size=(batch_size,), dtype=torch.long)
+    t = torch.randint(low=1, high=num_timestamps + 1, size=(batch_size,), dtype=torch.long)
 
     predicted_noise = model(gaussian_inputs, t.float())
     print("Predicted noise shape:", predicted_noise.shape)
-    print("\nTotal number of trainable parameters:", count_parameters(model))
+    print("Total trainable parameters:", f"{count_parameters(model):,}")
+
+    # Verify permutation equivariance
+    perm = torch.randperm(num_gaussians)
+    out_original = model(gaussian_inputs, t.float())
+    out_permuted = model(gaussian_inputs[:, perm], t.float())
+    equivariance_error = (out_original[:, perm] - out_permuted).abs().max().item()
+    print(f"Permutation equivariance error: {equivariance_error:.2e}")

@@ -18,7 +18,7 @@ import argparse
 import math
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -27,14 +27,6 @@ from PIL import Image
 from tqdm import tqdm
 
 from src.utils.gaussian_to_image import generate_2D_gaussian_splatting
-
-
-# ---------------------------------------------------------------------------
-# Module-level Sobel filter constants (no runtime cost)
-# ---------------------------------------------------------------------------
-
-_SOBEL_X = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32)
-_SOBEL_Y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32)
 
 
 # ---------------------------------------------------------------------------

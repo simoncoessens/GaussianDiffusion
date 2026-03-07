@@ -39,7 +39,7 @@ This project was initiated during our Master’s at CentraleSupélec, and we hav
 
 ### Abstract
 
-Diffusion models have become a leading approach in generative image modeling, but many still operate in dense pixel space, a representation that is computationally intensive and lacks geometric structure. We propose Gaussian-Diffusion, a framework that performs the denoising process entirely in a latent space composed of 2D Gaussians. Each image is encoded as a set of 150 anisotropic Gaussian splats, parameterized by position, covariance, and color. To model their dynamics, we introduce GaussianTransformer, a permutation-equivariant transformer that serves as the denoising network. Evaluated on MNIST and Sprites datasets, our method achieves visual quality comparable to a pixel space U-Net baseline, while reducing the number of sampling steps from 1000 to 200 and the per-step cost from 11.4 GFLOPs to 4 GFLOPs, resulting in an overall 22× improvement in generation time on an A100 GPU. In contrast to latent diffusion models, our approach does not require an auxiliary autoencoder and preserves full editability of the latent. These findings suggest that structured geometric representations can offer efficient and interpretable alternatives to latent and pixel-based diffusion.
+Diffusion models have become a leading approach in generative image modeling, but many still operate in dense pixel space, a representation that is computationally intensive and lacks geometric structure. We propose Gaussian-Diffusion, a framework that performs the denoising process entirely in a latent space composed of 2D Gaussians. Each image is encoded as a set of K anisotropic Gaussian splats, parameterized by position, covariance, and color (e.g. K=70 for MNIST). To model their dynamics, we introduce GaussianTransformer, a permutation-equivariant transformer that serves as the denoising network. Evaluated on MNIST and Sprites datasets, our method achieves visual quality comparable to a pixel space U-Net baseline, while reducing the number of sampling steps from 1000 to 200 and the per-step cost from 11.4 GFLOPs to 4 GFLOPs, resulting in an overall 22× improvement in generation time on an A100 GPU. In contrast to latent diffusion models, our approach does not require an auxiliary autoencoder and preserves full editability of the latent. These findings suggest that structured geometric representations can offer efficient and interpretable alternatives to latent and pixel-based diffusion.
 
 ## Current status
 
@@ -109,13 +109,14 @@ See loaders in `src/dataset.py` for exact formats.
 
 ## Repository structure
 
-- `src/models/` — Transformer architectures (e.g., `transformer_model.py`, `flash_transformer_model.py`)
-- `src/train/` — Training scripts for MNIST, Sprites, CIFAR-10
-- `src/metrics/` — Sampling and evaluation utilities (FID/IS/KID)
+- `src/models/` — Transformer architecture (`transformer_model.py`)
+- `src/train.py` — Training script (DDPM on Gaussian latents)
+- `src/sample.py` — Sampling and evaluation (FID/IS/KID)
+- `src/encode.py` — Encoder: image → Gaussian representation
 - `src/utils/` — Normalization/denormalization and rendering helpers
 - `src/ddpm.py` — DDPM schedules (linear/cosine)
 - `src/dataset.py` — Dataset readers for Gaussian latents
-- `Preliminary work/` — Notebooks and dataset preparation drafts
+- `scripts/` — SLURM launchers and encoding pipelines
 
 ## Useful references
 

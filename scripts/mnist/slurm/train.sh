@@ -24,7 +24,7 @@ PYTHON=/gpfs/workdir/coessenss/NLS/nls_env_new/bin/python
 WORKDIR=/gpfs/workdir/coessenss/GaussianDiffusion
 
 cd "$WORKDIR"
-mkdir -p logs checkpoints samples
+mkdir -p logs checkpoints/mnist samples/mnist
 
 DATA_DIR=${DATA_DIR:-"data/mnist_gaussian_representations_v2/train/"}
 EPOCHS=${EPOCHS:-500}
@@ -53,12 +53,15 @@ fi
 echo ""
 
 $PYTHON -m src.train \
+    --config        mnist \
     --data_dir      "$DATA_DIR" \
     --epochs        "$EPOCHS" \
     --batch_size    "$BATCH_SIZE" \
     --lr            "$LR" \
     --timesteps     "$TIMESTEPS" \
     --num_gaussians "$NUM_GAUSSIANS" \
+    --checkpoint_dir checkpoints/mnist/ \
+    --sample_dir    samples/mnist/ \
     --sample_every  "$SAMPLE_EVERY"
 
 echo ""

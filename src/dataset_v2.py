@@ -141,6 +141,8 @@ class GaussianDatasetV2(Dataset):
             W_np = self._h5_handle["W"][global_idx]
 
         W_tensor = torch.from_numpy(W_np.copy()).float()  # [K, 7]
+        # Drop alpha (column 3): [sigma_x, sigma_y, rho, colour, x, y]
+        W_tensor = torch.cat([W_tensor[:, :3], W_tensor[:, 4:]], dim=1)  # [K, 6]
         label = int(self._labels[idx])
         return W_tensor, label
 

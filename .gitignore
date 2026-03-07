@@ -17,9 +17,10 @@ ENV/
 *.swo
 *~
 
-# Data and outputs
-data/
-checkpoints/
+# Data and outputs (per-dataset subdirs: data/mnist/, checkpoints/mnist/, etc.)
+data/*/
+checkpoints/*/
+samples/*/
 results/
 logs/
 *.out
@@ -38,32 +39,30 @@ wandb/
 .ipynb_checkpoints/
 *.ipynb
 
-# LaTeX build artifacts (keep source, ignore builds)
+# LaTeX build artifacts (keep source and final PDFs, ignore build intermediates)
 reports/**/*.aux
 reports/**/*.log
 reports/**/*.out
 reports/**/*.toc
-reports/**/*.pdf
 reports/**/*.synctex.gz
 reports/**/*.fdb_latexmk
 reports/**/*.fls
 reports/**/*.bbl
 reports/**/*.blg
 
-# But keep LaTeX sources and figures
+# Keep LaTeX sources, figures, and PDFs
 !reports/**/*.tex
+!reports/**/*.pdf
 !reports/**/*.png
 !reports/**/*.jpg
-!reports/**/*.pdf  # Allow specific PDFs if needed
 !reports/**/*.gif
 !reports/**/*.mp4
 
-# Keep important data files (allow specific patterns if needed)
+# Keep structure (.gitkeep files)
 !data/.gitkeep
-
-# Keep structure
 !logs/.gitkeep
 !checkpoints/.gitkeep
+!samples/.gitkeep
 !results/.gitkeep
 
 # OS

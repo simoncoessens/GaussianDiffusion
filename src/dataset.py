@@ -6,8 +6,8 @@ from torch.utils.data import Dataset
 class GaussianDataset(Dataset):
     """
     Dataset of 2D Gaussian splatting representations for MNIST.
-    Each sample is a tensor of shape [K, 7] loaded from a .pt file
-    saved by src/encode.py.
+    Each sample is a tensor of shape [K, 6] loaded from a .pt file
+    saved by src/encode.py (alpha column 3 is dropped).
     """
 
     def __init__(self, data_dir: str, num_gaussians: int = 70):
@@ -26,6 +26,8 @@ class GaussianDataset(Dataset):
             except (KeyError, Exception):
                 continue
             if w.shape[0] == num_gaussians:
+                # Drop alpha (column 3): [sigma_x, sigma_y, rho, colour, x, y]
+                w = torch.cat([w[:, :3], w[:, 4:]], dim=1)
                 samples.append(w)
 
         if not samples:
@@ -33,7 +35,7 @@ class GaussianDataset(Dataset):
                 f"No valid samples with {num_gaussians} Gaussians found in {data_dir}"
             )
 
-        self.data = torch.stack(samples, dim=0)  # [N, K, 7]
+        self.data = torch.stack(samples, dim=0)  # [N, K, 6]
 
     def __len__(self) -> int:
         return len(self.data)
