@@ -91,7 +91,7 @@ def encode_and_measure(image: torch.Tensor, config: dict, device: str) -> dict:
 # ---------------------------------------------------------------------------
 
 FIELDNAMES = ["K", "epochs", "lr", "kernel_size",
-              "mean_psnr", "std_psnr", "mean_ssim", "std_ssim", "mean_time_s"]
+              "mean_psnr", "std_psnr", "mean_time_s"]
 
 
 def _config_key(config: dict) -> str:
@@ -148,8 +148,6 @@ def run_phase(phase_id: int, configs: list, images: list,
             "kernel_size": config["kernel_size"],
             "mean_psnr": f"{psnr_t.mean().item():.4f}",
             "std_psnr": f"{psnr_t.std().item():.4f}",
-            "mean_ssim": "N/A",   # SSIM-loss not separately tracked to keep it fast
-            "std_ssim": "N/A",
             "mean_time_s": f"{sum(times)/len(times):.4f}",
         }
         writer.writerow(row)

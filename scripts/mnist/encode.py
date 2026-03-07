@@ -346,7 +346,7 @@ def main():
                 n_ep = args.epochs  # worst case; actual epoch not returned by default
 
                 # Write to HDF5
-                hf["W"][row]           = W_phys.numpy()
+                hf["W"][row]           = W_phys.cpu().numpy()
                 hf["labels"][row]      = digit
                 hf["psnr"][row]        = psnr
                 hf["n_epochs"][row]    = n_ep

@@ -3,7 +3,7 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --array=0-3
 #SBATCH --gres=gpu:1
-#SBATCH -p gpua100
+#SBATCH -p gpu
 #SBATCH --mem=60G
 #SBATCH --cpus-per-task=4
 #SBATCH --time=24:00:00
@@ -14,10 +14,10 @@
 # Each shard runs on one A100 GPU and processes 17,500 images.
 #
 # Submit (fresh):
-#   sbatch --array=0-3 scripts/slurm_encode_full_mnist.sh
+#   sbatch --array=0-3 scripts/mnist/slurm/encode.sh
 #
 # Resume after crash (re-run the failed shards):
-#   sbatch --array=2 scripts/slurm_encode_full_mnist.sh --resume
+#   sbatch --array=2 scripts/mnist/slurm/encode.sh --resume
 #   (the --resume flag is forwarded to the Python script via EXTRA_ARGS)
 #
 # Monitor:
@@ -31,9 +31,9 @@ echo "  GPU     : $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/nul
 echo "  Started : $(date)"
 echo "========================================================"
 
-module load gcc/11.2.0/gcc-4.8.5
-module load anaconda3/2022.10/gcc-11.2.0
-module load cuda/12.2.1/gcc-11.2.0
+module load gcc/15.1.0/gcc-15.1.0
+module load anaconda3/2023.09-0/none-none
+module load cuda/12.2.2/none-none
 
 export PYTHONUNBUFFERED=1
 
@@ -51,7 +51,7 @@ echo ""
 
 WORKDIR=/gpfs/workdir/coessenss/GaussianDiffusion
 cd "$WORKDIR"
-mkdir -p logs data/mnist_gaussians_shards
+mkdir -p logs data/mnist/shards
 
 SHARD_ID=${SLURM_ARRAY_TASK_ID}
 
@@ -79,10 +79,10 @@ if [ "${RESUME:-0}" = "1" ]; then
     echo "  [RESUME MODE: skipping already-done rows]"
 fi
 
-$PYTHON scripts/encode_full_mnist.py \
+$PYTHON scripts/mnist/encode.py \
     --shard_id     "$SHARD_ID" \
     --n_shards     "$N_SHARDS" \
-    --out_dir      data/mnist_gaussians_shards \
+    --out_dir      data/mnist/shards \
     --device       "$DEVICE" \
     --K            "$K" \
     --epochs       "$EPOCHS" \

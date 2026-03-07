@@ -58,7 +58,7 @@ This pipeline encodes the full MNIST dataset (60k train + 10k test) into Gaussia
 
 **Per-shard files** (`data/mnist_gaussians_shards/shard_{0..3}.h5`):
 ```
-/W            [N_shard, 70, 7]  float32  Gaussian parameters (chunked, lz4)
+/W            [N_shard, 70, 7]  float32  Gaussian parameters (chunked, gzip)
 /labels       [N_shard]         uint8    Digit class 0–9
 /psnr         [N_shard]         float32  Reconstruction quality (dB)
 /n_epochs     [N_shard]         int32    Epochs taken

@@ -232,15 +232,15 @@ def main():
     t0 = time.time()
     with h5py.File(out_file, "w") as hf:
         hf.create_dataset("W", data=W_all,
-                          chunks=(256, K, 7), compression="gzip")
-        hf.create_dataset("labels",      data=labels_all,      compression="gzip")
-        hf.create_dataset("psnr",        data=psnr_all,        compression="gzip")
-        hf.create_dataset("n_epochs",    data=n_epochs_all,    compression="gzip")
-        hf.create_dataset("converged",   data=converged_all,   compression="gzip")
-        hf.create_dataset("n_dead",      data=n_dead_all,      compression="gzip")
-        hf.create_dataset("orig_split",  data=orig_split_all,  compression="gzip")
-        hf.create_dataset("orig_index",  data=orig_index_all,  compression="gzip")
-        hf.create_dataset("encode_time", data=encode_time_all, compression="gzip")
+                          chunks=(256, K, 7))
+        hf.create_dataset("labels",      data=labels_all)
+        hf.create_dataset("psnr",        data=psnr_all)
+        hf.create_dataset("n_epochs",    data=n_epochs_all)
+        hf.create_dataset("converged",   data=converged_all)
+        hf.create_dataset("n_dead",      data=n_dead_all)
+        hf.create_dataset("orig_split",  data=orig_split_all)
+        hf.create_dataset("orig_index",  data=orig_index_all)
+        hf.create_dataset("encode_time", data=encode_time_all)
 
         # Root attrs
         hf.attrs["K"]               = K

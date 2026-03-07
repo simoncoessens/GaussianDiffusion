@@ -33,7 +33,7 @@ import torchvision
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from src.encode import encode_image, _dead_mask, _to_physical
+from src.encode import encode_image
 from src.utils.gaussian_to_image import generate_2D_gaussian_splatting
 
 
