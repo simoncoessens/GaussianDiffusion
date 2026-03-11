@@ -108,12 +108,17 @@ class DiTBlock(nn.Module):
 
         # Self-attention with AdaLN
         h = modulate(self.norm1(x), shift_attn, scale_attn)
-        attn_out, _ = self.attn(h, h, h)
+        attn_out, _ = self.attn(h, h, h, need_weights=False)
         x = x + gate_attn * attn_out
+        # Clamp to prevent fp16 overflow accumulation across blocks
+        if x.dtype == torch.float16:
+            x = x.clamp(-1e4, 1e4)
 
         # FFN with AdaLN
         h = modulate(self.norm2(x), shift_mlp, scale_mlp)
         x = x + gate_mlp * self.mlp(h)
+        if x.dtype == torch.float16:
+            x = x.clamp(-1e4, 1e4)
 
         return x
 
@@ -123,9 +128,8 @@ class LabelEmbedder(nn.Module):
 
     def __init__(self, num_classes, hidden_size, dropout_prob=0.0):
         super().__init__()
-        use_cfg = dropout_prob > 0
-        # +1 for the "null" / unconditional class token
-        self.embedding_table = nn.Embedding(num_classes + use_cfg, hidden_size)
+        # Always allocate +1 for the null/unconditional class token (used during CFG sampling)
+        self.embedding_table = nn.Embedding(num_classes + 1, hidden_size)
         self.num_classes = num_classes
         self.dropout_prob = dropout_prob
 

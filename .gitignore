@@ -18,6 +18,7 @@ ENV/
 *~
 
 # Data and outputs (per-dataset subdirs: data/mnist/, checkpoints/mnist/, etc.)
+data/
 data/*/
 checkpoints/*/
 samples/*/

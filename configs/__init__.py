@@ -2,10 +2,12 @@
 
 from configs.mnist import MNIST_CONFIG
 from configs.cifar10 import CIFAR10_CONFIG
+from configs.celeba64 import CELEBA64_CONFIG
 
 CONFIGS = {
     "mnist": MNIST_CONFIG,
     "cifar10": CIFAR10_CONFIG,
+    "celeba64": CELEBA64_CONFIG,
 }
 
 

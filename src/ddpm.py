@@ -53,6 +53,27 @@ class DDPM(nn.Module):
 
         return x_t, x_t_minus_1, eps
 
+    def get_velocity(self, x: torch.Tensor, eps: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
+        """Compute velocity target: v = sqrt(ab_t) * eps - sqrt(1-ab_t) * x0."""
+        device = x.device
+        sqrtab_t = self.sqrtab.to(device)[timesteps].view(-1, 1, 1)
+        sqrtmab_t = self.sqrtmab.to(device)[timesteps].view(-1, 1, 1)
+        return sqrtab_t * eps - sqrtmab_t * x
+
+    def v_to_eps(self, v: torch.Tensor, x_t: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
+        """Convert v-prediction to epsilon: eps = sqrt(1-ab_t) * x_t + sqrt(ab_t) * v."""
+        device = x_t.device
+        sqrtab_t = self.sqrtab.to(device)[timesteps].view(-1, 1, 1)
+        sqrtmab_t = self.sqrtmab.to(device)[timesteps].view(-1, 1, 1)
+        return sqrtmab_t * x_t + sqrtab_t * v
+
+    def v_to_x0(self, v: torch.Tensor, x_t: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
+        """Convert v-prediction to x0: x0 = sqrt(ab_t) * x_t - sqrt(1-ab_t) * v."""
+        device = x_t.device
+        sqrtab_t = self.sqrtab.to(device)[timesteps].view(-1, 1, 1)
+        sqrtmab_t = self.sqrtmab.to(device)[timesteps].view(-1, 1, 1)
+        return sqrtab_t * x_t - sqrtmab_t * v
+
 def ddpm_schedules(beta1: float, beta2: float, T: int) -> Dict[str, torch.Tensor]:
     """
     Compute the DDPM schedules using a linear beta schedule.

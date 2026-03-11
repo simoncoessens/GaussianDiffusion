@@ -1,23 +1,22 @@
 #!/bin/bash
-#SBATCH --job-name=cifar_sample
+#SBATCH --job-name=celeba_sample
 #SBATCH --gres=gpu:1
 #SBATCH -p gpua100
-#SBATCH --mem=60G
+#SBATCH --mem=80G
 #SBATCH --cpus-per-task=4
-#SBATCH --time=04:00:00
-#SBATCH --output=logs/cifar10_sample_%j.out
-#SBATCH --error=logs/cifar10_sample_%j.err
+#SBATCH --time=08:00:00
+#SBATCH --output=logs/celeba64_sample_%j.out
+#SBATCH --error=logs/celeba64_sample_%j.err
 
-# Sample from CIFAR-10 checkpoint and compute FID/IS/KID.
+# Sample from CelebA-64 checkpoint and compute FID/IS/KID (unconditional).
 #
 # Env vars:
-#   CHECKPOINT=checkpoints/cifar10/baseline/last.pt  (required)
-#   N_SAMPLES=10000  CFG_SCALE=1.5  SAMPLER=ddpm
-#   DDIM_STEPS=200  DDIM_ETA=0.0  TAG=baseline
+#   CHECKPOINT=checkpoints/celeba64/baseline/last.pt  (required)
+#   N_SAMPLES=10000  SAMPLER=ddpm  DDIM_STEPS=200  DDIM_ETA=0.0  TAG=baseline
 #
 # Submit:
-#   CHECKPOINT=checkpoints/cifar10/6b16h256d/last.pt TAG=6b16h256d sbatch scripts/cifar10/slurm/sample.sh
-#   SAMPLER=ddim DDIM_ETA=0.4 CHECKPOINT=... sbatch scripts/cifar10/slurm/sample.sh
+#   CHECKPOINT=checkpoints/celeba64/6b16h256d/last.pt TAG=6b16h256d sbatch scripts/celeba64/slurm/sample.sh
+#   SAMPLER=ddim DDIM_ETA=0.4 CHECKPOINT=... sbatch scripts/celeba64/slurm/sample.sh
 
 module load gcc/11.2.0/gcc-4.8.5
 module load anaconda3/2022.10/gcc-11.2.0
@@ -31,33 +30,28 @@ mkdir -p logs
 
 CHECKPOINT=${CHECKPOINT:?"CHECKPOINT env var required"}
 N_SAMPLES=${N_SAMPLES:-10000}
-CFG_SCALE=${CFG_SCALE:-1.5}
 SAMPLER=${SAMPLER:-ddpm}
 DDIM_STEPS=${DDIM_STEPS:-200}
 DDIM_ETA=${DDIM_ETA:-0.0}
 TAG=${TAG:-"eval"}
-BATCH_SIZE=${BATCH_SIZE:-32}
-STANDARDIZED=${STANDARDIZED:-"yes"}  # "yes" for new models, "no" for old (Phase 1)
+BATCH_SIZE=${BATCH_SIZE:-16}
 
-OUT_DIR="samples/cifar10/${TAG}_${SAMPLER}"
+OUT_DIR="samples/celeba64/${TAG}_${SAMPLER}"
 if [ "$SAMPLER" = "ddim" ]; then
     OUT_DIR="${OUT_DIR}_s${DDIM_STEPS}_e${DDIM_ETA}"
 fi
-OUT_DIR="${OUT_DIR}_w${CFG_SCALE}"
 
-REAL_SOURCE=${REAL_SOURCE:-cifar10}  # "cifar10" (original images) or "h5" (rendered Gaussians)
-DATA_H5="data/cifar10/cifar10_gaussians_K500.h5"
+DATA_H5="data/celeba64/celeba64_gaussians_K1000.h5"
 
 mkdir -p "$OUT_DIR"
 
 echo "========================================================"
-echo "  SLURM job $SLURM_JOB_ID — CIFAR-10 sampling"
+echo "  SLURM job $SLURM_JOB_ID — CelebA-64 sampling"
 echo "  Host       : $(hostname)"
 echo "  GPU        : $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null)"
 echo "  CHECKPOINT : $CHECKPOINT"
 echo "  N_SAMPLES  : $N_SAMPLES"
 echo "  SAMPLER    : $SAMPLER"
-echo "  CFG_SCALE  : $CFG_SCALE"
 if [ "$SAMPLER" = "ddim" ]; then
 echo "  DDIM_STEPS : $DDIM_STEPS"
 echo "  DDIM_ETA   : $DDIM_ETA"
@@ -70,26 +64,12 @@ if [ "$SAMPLER" = "ddim" ]; then
     SAMPLER_ARGS="$SAMPLER_ARGS --ddim_steps $DDIM_STEPS --ddim_eta $DDIM_ETA"
 fi
 
-REAL_ARGS=""
-if [ "$REAL_SOURCE" = "h5" ]; then
-    REAL_ARGS="--real_data_h5 $DATA_H5"
-else
-    REAL_ARGS="--use_real_cifar10"
-fi
-
-STD_ARGS=""
-if [ "$STANDARDIZED" = "no" ]; then
-    STD_ARGS="--no_standardized"
-fi
-
-$PYTHON scripts/cifar10/sample.py \
+$PYTHON scripts/celeba64/sample.py \
     --checkpoint    "$CHECKPOINT" \
-    $REAL_ARGS \
+    --real_data_h5  "$DATA_H5" \
     --n_samples     "$N_SAMPLES" \
     --batch_size    "$BATCH_SIZE" \
-    --cfg_scale     "$CFG_SCALE" \
     --out_dir       "$OUT_DIR" \
-    $STD_ARGS \
     $SAMPLER_ARGS
 
 echo ""

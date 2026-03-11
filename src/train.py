@@ -379,6 +379,9 @@ def train(args):
             wandb.log(log_dict)
 
         # ---- Checkpoints ----
+        is_best = val_loss < best_val_loss
+        if is_best:
+            best_val_loss = val_loss
         ckpt = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
@@ -392,8 +395,7 @@ def train(args):
         if ema is not None:
             ckpt["ema_shadow"] = ema.state_dict()
         torch.save(ckpt, os.path.join(args.checkpoint_dir, "last.pt"))
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if is_best:
             torch.save(ckpt, os.path.join(args.checkpoint_dir, "best.pt"))
 
     if use_wandb:
